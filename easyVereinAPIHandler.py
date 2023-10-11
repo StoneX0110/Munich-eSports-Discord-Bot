@@ -8,8 +8,6 @@ with open('config.json', 'r') as f:
 API_TOKEN = config['API_token']
 header = {'Authorization': f'Token {API_TOKEN}'}
 
-# TODO implement automatic conversion of discord tags to discord ids
-
 
 def get_discord_id(member_url):
     member = requests.get(member_url+"?query={customFields}&limit=1000", headers=header).json()
@@ -28,10 +26,11 @@ def get_birthday_members():
         _convert_birthday_to_date(member)
 
         birthday = member['dateOfBirth']
-        today = date.today()
+        # today = date.today()
+        today = date.fromisoformat("2000-10-01")  # TODO remove
 
         if birthday.month == today.month and birthday.day == today.day:
-            birthday_members.append(member)
+            birthday_members.append(member['member'])
 
     return birthday_members
 
