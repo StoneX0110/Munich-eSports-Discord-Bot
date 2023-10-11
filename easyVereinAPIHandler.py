@@ -12,9 +12,9 @@ header = {'Authorization': f'Token {API_TOKEN}'}
 
 
 def get_discord_id(member_url):
-    member = requests.get(member_url+"?query={customFields}", headers=header).json()
+    member = requests.get(member_url+"?query={customFields}&limit=1000", headers=header).json()
     res = requests.get(member['customFields'], headers=header)
-    custom_fields = res.json()['results']
+    custom_fields = _get_all_results(res)
     for field in custom_fields:
         # TODO need to check for birthday-post-consent checkbox
         if '34867055' in str(field['customField']):
@@ -39,11 +39,11 @@ def get_birthday_members():
 def _get_members():
     res = requests.get('https://easyverein.com/api/v1.6/contact-details?query={dateOfBirth, member}&limit=1000',
                        headers=header)
-    all_results = _get_all_results(header, res)
+    all_results = _get_all_results(res)
     return [member for member in all_results if member['member'] is not None and member['dateOfBirth'] is not None]
 
 
-def _get_all_results(header, res):
+def _get_all_results(res):
     all_results = res.json()['results']
     next_page = res.json()['next']
     while next_page:
