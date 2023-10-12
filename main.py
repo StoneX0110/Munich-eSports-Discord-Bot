@@ -20,6 +20,7 @@ class MyClient(discord.Client):
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         if payload.message_id == 1161782437798494228:
             channel = self.get_channel(711943678566072455)
+
             await channel.send(f"<@{payload.user_id}> kriegt jetzt Geburtstagswünsche! :)")
 
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
@@ -35,7 +36,10 @@ class MyClient(discord.Client):
         channel = self.get_channel(711943678566072455)  # orga-spam
         while not self.is_closed():
             for member in api.get_birthday_members():
-                await channel.send(f"Happy Birthday <@{api.get_discord_id(member)}>!")
+                discord_id = api.get_discord_id(member)
+                if discord_id != 0:
+                    await channel.send(f"Happy Birthday <@{discord_id}>!")
+
             await asyncio.sleep(86400)  # 24 hours
 
 

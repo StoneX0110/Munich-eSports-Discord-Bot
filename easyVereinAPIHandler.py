@@ -9,12 +9,28 @@ API_TOKEN = config['API_token']
 header = {'Authorization': f'Token {API_TOKEN}'}
 
 
+# TODO
+def set_birthday_wishes_checkbox():
+    res = requests.patch("https://easyverein.com/api/v1.6/member/1253810/custom-fields/178015180", headers=header)
+
+
 def get_discord_id(member_url):
     member = requests.get(member_url+"?query={customFields}&limit=1000", headers=header).json()
     res = requests.get(member['customFields'], headers=header)
     custom_fields = _get_all_results(res)
+    if _allows_birthday_wishes(custom_fields):
+        return _find_discord_id(custom_fields)
+    return 0
+
+
+def _allows_birthday_wishes(custom_fields):
     for field in custom_fields:
-        # TODO need to check for birthday-post-consent checkbox
+        if '177910549' in str(field['customField']):
+            return field['value'] == 'True'
+
+
+def _find_discord_id(custom_fields):
+    for field in custom_fields:
         if '34867055' in str(field['customField']):
             return field['value']
 
@@ -26,8 +42,7 @@ def get_birthday_members():
         _convert_birthday_to_date(member)
 
         birthday = member['dateOfBirth']
-        # today = date.today()
-        today = date.fromisoformat("2000-10-01")  # TODO remove
+        today = date.today()
 
         if birthday.month == today.month and birthday.day == today.day:
             birthday_members.append(member['member'])
