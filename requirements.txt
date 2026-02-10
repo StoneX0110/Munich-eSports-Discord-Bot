@@ -1,3 +1,4 @@
-requests~=2.31.0
-discord~=2.3.2
-asyncio~=3.4.3
+discord.py>=2.3
+python-easyverein>=2.3
+python-dotenv>=1.2.1
+tzdata
