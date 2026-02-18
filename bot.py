@@ -6,6 +6,8 @@ Syncs club membership roles from easyVerein and sends birthday greetings.
 
 import logging
 import os
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 import random
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -57,7 +59,7 @@ BIRTHDAY_MESSAGES = [
     "🎊 GG WP, {mention}! You've completed another year. Happy Birthday! 🎂🏆",
     "🎮 Happy Birthday, {mention}! May today's loot drops be extra generous! 🎁✨",
     "🎉 The whole squad wishes you a Happy Birthday, {mention}! 🫡🎂",
-    "🥳 {mention} has entered a new season of life! Happy Birthday! ��🎉",
+    "🥳 {mention} has entered a new season of life! Happy Birthday! 🎉",
     "🔁 Respawn complete – {mention} is back for another epic year! Happy Birthday! 🔄🎈",
     "🎁 Happy Birthday, {mention}! Wishing you a day full of clutch plays and good vibes! 🎯🥳",
 ]
@@ -65,10 +67,24 @@ BIRTHDAY_MESSAGES = [
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_LOG_DIR = Path(__file__).resolve().parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+
+# Console handler (same as before)
+logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
+
+# Rotating file handler (5 MB per file, 5 backups)
+_file_handler = RotatingFileHandler(
+    _LOG_DIR / "bot.log",
+    maxBytes=5 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8",
 )
+_file_handler.setLevel(logging.INFO)
+_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+
+logging.getLogger().addHandler(_file_handler)  # attach to root logger
 logger = logging.getLogger("munich_esports_bot")
 
 # ---------------------------------------------------------------------------
