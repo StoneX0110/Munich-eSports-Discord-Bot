@@ -1,68 +1,42 @@
 """
 Munich eSports Discord Membership Bot
 
-Syncs club membership roles from easyVerein and sends birthday greetings.
+Syncs club membership roles from easyVerein, sends birthday greetings,
+welcomes new club members, and celebrates membership anniversaries.
 """
 
+import json
 import logging
-import os
+import random
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-import random
-from datetime import datetime, time
-from zoneinfo import ZoneInfo
 
 import discord
 from discord.ext import tasks
-from dotenv import load_dotenv, set_key, find_dotenv
+from dotenv import set_key, find_dotenv
 from easyverein import BearerToken, EasyvereinAPI
 from easyverein.models import CustomField, Member
 from easyverein.models.member import MemberFilter
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-load_dotenv()
-
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
-EV_API_KEY = os.getenv("EV_API_KEY", "")
-
-GUILD_ID = 615552039027736595
-MEMBERSHIP_ROLE_ID = 615555478210215936
-BIRTHDAY_CHANNEL_ID = 626072050989006859
-
-# easyVerein custom field IDs
-DISCORD_ID_FIELD_ID = 34867055        # "Discord-ID" – stores Discord user ID or tag
-BIRTHDAY_CONSENT_FIELD_ID = 177910549  # "Zustimmung Geburtstagswünsche" – checkbox
-
-# The daily task runs at 08:00 Berlin time (handles CET/CEST automatically)
-DAILY_RUN_TIME = time(hour=8, minute=0, second=0, tzinfo=ZoneInfo("Europe/Berlin"))
-
-# ---------------------------------------------------------------------------
-# Birthday greeting messages (randomly selected)
-# ---------------------------------------------------------------------------
-BIRTHDAY_MESSAGES = [
-    "🎂 Happy Birthday, {mention}! 🎉 The Munich eSports team wishes you a wonderful day!",
-    "🥳 It's {mention}'s birthday today! Have an amazing day! 🎈🎁",
-    "🎉 Happy Birthday, {mention}! May your day be full of GGs and epic wins! 🏆",
-    "🥳 Happy Birthday, {mention}! 🎮 Time to celebrate – you've leveled up! 🆙",
-    "🎂 Cheers to {mention}! 🥂 Wishing you the best birthday ever!",
-    "🎊 {mention} just unlocked a new year! Happy Birthday! 🔓🎉",
-    "🎁 Happy Birthday, {mention}! Hope your day is as legendary as a pentakill! 🏅",
-    "🎶 {mention} is celebrating today! Happy Birthday from all of Munich eSports! 🎂",
-    "🥳 Level up! {mention} gained +1 year of awesomeness. Happy Birthday! 🆙✨",
-    "🎂 Happy Birthday, {mention}! May your ping be low and your FPS be high today! 📶",
-    "🎉 It's a big day for {mention}! Wishing you nothing but W's on your birthday! 🏆",
-    "🎮 Happy Birthday, {mention}! Time to drop in and celebrate! 🪂🎂",
-    "🎂 Another year, another rank up! Happy Birthday, {mention}! 🌟",
-    "🥳 {mention}, it's YOUR day! Happy Birthday – enjoy every moment! 🎈🎁",
-    "🎊 GG WP, {mention}! You've completed another year. Happy Birthday! 🎂🏆",
-    "🎮 Happy Birthday, {mention}! May today's loot drops be extra generous! 🎁✨",
-    "🎉 The whole squad wishes you a Happy Birthday, {mention}! 🫡🎂",
-    "🥳 {mention} has entered a new season of life! Happy Birthday! 🎉",
-    "🔁 Respawn complete – {mention} is back for another epic year! Happy Birthday! 🔄🎈",
-    "🎁 Happy Birthday, {mention}! Wishing you a day full of clutch plays and good vibes! 🎯🥳",
-]
+from config import (
+    BIRTHDAY_CONSENT_FIELD_ID,
+    DAILY_RUN_TIME,
+    DISCORD_ID_FIELD_ID,
+    DISCORD_TOKEN,
+    EV_API_KEY,
+    GENERAL_CHANNEL_ID,
+    GUILD_ID,
+    KNOWN_MEMBERS_FILE,
+    MEMBER_CHANNEL_ID,
+    MEMBERSHIP_ROLE_ID,
+)
+from messages import (
+    ANNIVERSARY_MESSAGES_1Y,
+    ANNIVERSARY_MESSAGES_NY,
+    BIRTHDAY_MESSAGES,
+    WELCOME_MESSAGES,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -71,7 +45,7 @@ _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _LOG_DIR = Path(__file__).resolve().parent / "logs"
 _LOG_DIR.mkdir(exist_ok=True)
 
-# Console handler (same as before)
+# Console handler
 logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
 
 # Rotating file handler (5 MB per file, 5 backups)
@@ -106,8 +80,6 @@ def _handle_token_refresh(new_token: BearerToken) -> None:
 
     Persists the new token to .env so it survives bot restarts.
     """
-    global EV_API_KEY
-    EV_API_KEY = new_token.Bearer
     if _dotenv_path:
         set_key(_dotenv_path, "EV_API_KEY", new_token.Bearer)
     logger.info("easyVerein API token was refreshed and saved to .env.")
@@ -124,6 +96,31 @@ ev_client = EasyvereinAPI(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _load_known_members() -> set[int] | None:
+    """Load the set of known easyVerein member IDs from disk.
+
+    Returns None if the file does not exist yet (first run).
+    """
+    if not KNOWN_MEMBERS_FILE.exists():
+        return None
+    try:
+        data = json.loads(KNOWN_MEMBERS_FILE.read_text(encoding="utf-8"))
+        return set(data)
+    except Exception:
+        logger.exception("Failed to load %s.", KNOWN_MEMBERS_FILE)
+        return None
+
+
+def _save_known_members(ids: set[int]) -> None:
+    """Persist the set of known easyVerein member IDs to disk."""
+    try:
+        KNOWN_MEMBERS_FILE.write_text(
+            json.dumps(sorted(ids)), encoding="utf-8"
+        )
+    except Exception:
+        logger.exception("Failed to save %s.", KNOWN_MEMBERS_FILE)
+
 
 def _get_custom_field_value(member: Member, field_id: int) -> str | None:
     """Extract the value of a specific custom field from a member object."""
@@ -142,7 +139,7 @@ def _is_numeric_discord_id(value: str) -> bool:
     return value.isdigit() and len(value) >= 15
 
 
-async def _resolve_discord_tag(guild: discord.Guild, tag: str) -> discord.Member | None:
+def _resolve_discord_tag(guild: discord.Guild, tag: str) -> discord.Member | None:
     """
     Try to find a guild member by their Discord username / display name.
     """
@@ -151,6 +148,28 @@ async def _resolve_discord_tag(guild: discord.Guild, tag: str) -> discord.Member
         if m.name.lower() == tag_lower:
             return m
     return None
+
+
+def _resolve_discord_member(
+    guild: discord.Guild,
+    ev_member: Member,
+) -> tuple[discord.Member | None, str | None]:
+    """Resolve an easyVerein member to a Discord guild member.
+
+    Looks up the Discord-ID custom field and resolves it to a guild member,
+    handling both numeric IDs and username tags.
+
+    Returns a tuple of (discord_member, raw_discord_value).  Both are None
+    if the member has no Discord-ID custom field set.
+    """
+    discord_value = _get_custom_field_value(ev_member, DISCORD_ID_FIELD_ID)
+    if not discord_value:
+        return None, None
+
+    if _is_numeric_discord_id(discord_value):
+        return guild.get_member(int(discord_value)), discord_value
+
+    return _resolve_discord_tag(guild, discord_value), discord_value
 
 
 async def _update_ev_discord_id(ev_member: Member, discord_user_id: str) -> None:
@@ -173,11 +192,11 @@ async def _update_ev_discord_id(ev_member: Member, discord_user_id: str) -> None
 
 
 # ---------------------------------------------------------------------------
-# Daily task – membership sync + birthday greetings
+# Daily task – membership sync, birthdays, welcomes, anniversaries
 # ---------------------------------------------------------------------------
 @tasks.loop(time=DAILY_RUN_TIME)
 async def daily_task():
-    """Runs once per day at 08:00 CET: sync roles and send birthday greetings."""
+    """Runs once per day at 08:00 CET: sync roles, birthdays, welcomes, anniversaries."""
     logger.info("Daily task started.")
 
     guild = client.get_guild(GUILD_ID)
@@ -190,16 +209,22 @@ async def daily_task():
         logger.error("Membership role %s not found – skipping.", MEMBERSHIP_ROLE_ID)
         return
 
-    birthday_channel = guild.get_channel(BIRTHDAY_CHANNEL_ID)
+    general_channel = guild.get_channel(GENERAL_CHANNEL_ID)
+    member_channel = guild.get_channel(MEMBER_CHANNEL_ID)
+
+    if not general_channel:
+        logger.warning("General channel %s not found.", GENERAL_CHANNEL_ID)
+    if not member_channel:
+        logger.warning("Member channel %s not found.", MEMBER_CHANNEL_ID)
 
     # ------------------------------------------------------------------
     # Fetch all active members from easyVerein
     # ------------------------------------------------------------------
     query = (
-        "{id,resignationDate,contactDetails{dateOfBirth},"
+        "{id,joinDate,resignationDate,contactDetails{dateOfBirth},"
         "customFields{customField{id,name},value}}"
     )
-    today = datetime.now(ZoneInfo("Europe/Berlin")).date()
+    today = datetime.now(DAILY_RUN_TIME.tzinfo).date()
 
     try:
         # 1. Members with NO resignation date (indefinite membership)
@@ -210,7 +235,6 @@ async def daily_task():
         members_indefinite = ev_client.member.get_all(query=query, search=search_indefinite)
 
         # 2. Members with FUTURE resignation date (still active until that date)
-        # Note: We filter for resignationDate >= today
         search_future_resignation = MemberFilter(
             resignationDate__gte=today,
             isApplication=False,
@@ -228,7 +252,7 @@ async def daily_task():
     logger.info("Fetched %d active members from easyVerein.", len(ev_members))
 
     # ------------------------------------------------------------------
-    # Build mappings: Discord user ID → ev_member
+    # Build mappings: easyVerein member → Discord member
     # ------------------------------------------------------------------
 
     # Sets for role sync
@@ -237,26 +261,21 @@ async def daily_task():
     tag_resolved: list[tuple] = []  # [(ev_member, discord_member), ...]
     # Birthday candidates
     birthday_discord_ids: set[int] = set()
+    # Map ev_member.id → resolved discord.Member (reused later for welcomes & anniversaries)
+    ev_to_discord: dict[int, discord.Member] = {}
 
     for ev_member in ev_members:
-        discord_value = _get_custom_field_value(ev_member, DISCORD_ID_FIELD_ID)
-        if not discord_value:
-            continue
+        discord_member, discord_value = _resolve_discord_member(guild, ev_member)
 
-        discord_member: discord.Member | None = None
-
-        if _is_numeric_discord_id(discord_value):
-            discord_member = guild.get_member(int(discord_value))
-        else:
-            # It's a tag/username – try to resolve
-            discord_member = await _resolve_discord_tag(guild, discord_value)
-            if discord_member:
-                tag_resolved.append((ev_member, discord_member))
+        # If it was a tag (not a numeric ID) and we resolved it, queue an update
+        if discord_member and discord_value and not _is_numeric_discord_id(discord_value):
+            tag_resolved.append((ev_member, discord_member))
 
         if discord_member is None:
             continue
 
         active_discord_ids.add(discord_member.id)
+        ev_to_discord[ev_member.id] = discord_member
 
         # Check birthday consent & date
         consent = _get_custom_field_value(ev_member, BIRTHDAY_CONSENT_FIELD_ID)
@@ -286,7 +305,6 @@ async def daily_task():
                 logger.exception("Failed to add role to %s.", member)
 
         elif not is_active and has_role:
-            # Don't remove roles from bots
             if member.bot:
                 continue
             try:
@@ -315,19 +333,93 @@ async def daily_task():
         )
 
     # ------------------------------------------------------------------
-    # Birthday greetings
+    # Birthday greetings (in #general)
     # ------------------------------------------------------------------
-    if birthday_channel and birthday_discord_ids:
+    if general_channel and birthday_discord_ids:
         for uid in birthday_discord_ids:
             member = guild.get_member(uid)
             if member is None:
                 continue
             message = random.choice(BIRTHDAY_MESSAGES).format(mention=member.mention)
             try:
-                await birthday_channel.send(message)
+                await general_channel.send(message)
                 logger.info("Sent birthday greeting to %s (%s).", member, uid)
             except discord.HTTPException:
                 logger.exception("Failed to send birthday greeting to %s.", member)
+
+    # ------------------------------------------------------------------
+    # New club member welcome messages (in #general)
+    # ------------------------------------------------------------------
+    if general_channel:
+        previous_known = _load_known_members()
+        current_ids = {m.id for m in ev_members}
+
+        if previous_known is None:
+            logger.info(
+                "First run: saving %d known members (no welcome messages sent).",
+                len(current_ids),
+            )
+        else:
+            new_member_ids = current_ids - previous_known
+            if new_member_ids:
+                logger.info("Detected %d new club member(s).", len(new_member_ids))
+
+            for ev_member in ev_members:
+                if ev_member.id not in new_member_ids:
+                    continue
+
+                discord_member = ev_to_discord.get(ev_member.id)
+                if discord_member is None:
+                    continue
+
+                message = random.choice(WELCOME_MESSAGES).format(
+                    mention=discord_member.mention
+                )
+                try:
+                    await general_channel.send(message)
+                    logger.info(
+                        "Sent welcome message for new club member %s (%s).",
+                        discord_member,
+                        discord_member.id,
+                    )
+                except discord.HTTPException:
+                    logger.exception(
+                        "Failed to send welcome message for %s.", discord_member
+                    )
+
+        _save_known_members(current_ids)
+
+    # ------------------------------------------------------------------
+    # Membership anniversary shoutouts (in #member-general)
+    # ------------------------------------------------------------------
+    if member_channel:
+        for ev_member in ev_members:
+            if not ev_member.joinDate:
+                continue
+            jd = ev_member.joinDate
+            if jd.month == today.month and jd.day == today.day and jd.year < today.year:
+                years = today.year - jd.year
+
+                discord_member = ev_to_discord.get(ev_member.id)
+                if discord_member is None:
+                    continue
+
+                templates = ANNIVERSARY_MESSAGES_1Y if years == 1 else ANNIVERSARY_MESSAGES_NY
+                message = random.choice(templates).format(
+                    mention=discord_member.mention, years=years
+                )
+                try:
+                    await member_channel.send(message)
+                    logger.info(
+                        "Sent anniversary message to %s (%s) – %d year(s).",
+                        discord_member,
+                        discord_member.id,
+                        years,
+                    )
+                except discord.HTTPException:
+                    logger.exception(
+                        "Failed to send anniversary message to %s.", discord_member
+                    )
 
     logger.info("Daily task finished.")
 

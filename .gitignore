@@ -16,3 +16,6 @@ build/
 
 # Logs
 logs/
+
+# Bot state
+known_members.json
