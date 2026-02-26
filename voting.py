@@ -299,15 +299,20 @@ class VoteSelectView(discord.ui.View):
 
         self.option_select = discord.ui.Select(
             placeholder="Wähle eine Option...",
-            options=[discord.SelectOption(label=opt, value=opt) for opt in options],
+            options=[
+                discord.SelectOption(label=opt, value=str(i))
+                for i, opt in enumerate(options)
+            ],
             custom_id=f"vote_select_{vote_id}",
         )
+        self.options_list = options
         self.option_select.callback = self.on_option_select
         self.add_item(self.option_select)
         self.selected_option = None
 
     async def on_option_select(self, interaction: discord.Interaction):
-        self.selected_option = interaction.data["values"][0]
+        idx = int(interaction.data["values"][0])
+        self.selected_option = self.options_list[idx]
 
         if self.remaining == 1:
             # Only one vote – cast directly and clean up
@@ -547,6 +552,12 @@ class VotingCog(commands.Cog):
         if len(option_list) > 25:
             await interaction.response.send_message(
                 "❌ Maximal 25 Optionen erlaubt.", ephemeral=True
+            )
+            return
+
+        if len(option_list) != len(set(option_list)):
+            await interaction.response.send_message(
+                "❌ Optionen dürfen nicht doppelt vorkommen.", ephemeral=True
             )
             return
 
