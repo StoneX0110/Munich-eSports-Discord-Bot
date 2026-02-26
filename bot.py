@@ -13,7 +13,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import discord
-from discord.ext import tasks
+from discord.ext import commands, tasks
 from dotenv import set_key, find_dotenv
 from easyverein import BearerToken, EasyvereinAPI
 from easyverein.models import CustomField, Member
@@ -30,6 +30,7 @@ from config import (
     KNOWN_MEMBERS_FILE,
     MEMBER_CHANNEL_ID,
     MEMBERSHIP_ROLE_ID,
+    VOTES_FILE,
 )
 from messages import (
     ANNIVERSARY_MESSAGES_1Y,
@@ -62,12 +63,12 @@ logging.getLogger().addHandler(_file_handler)  # attach to root logger
 logger = logging.getLogger("munich_esports_bot")
 
 # ---------------------------------------------------------------------------
-# Discord client setup
+# Discord bot setup
 # ---------------------------------------------------------------------------
 intents = discord.Intents.default()
 intents.members = True  # Required to iterate guild members & resolve tags
 
-client = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ---------------------------------------------------------------------------
 # easyVerein client (with automatic token refresh)
@@ -199,7 +200,7 @@ async def daily_task():
     """Runs once per day at 08:00 CET: sync roles, birthdays, welcomes, anniversaries."""
     logger.info("Daily task started.")
 
-    guild = client.get_guild(GUILD_ID)
+    guild = bot.get_guild(GUILD_ID)
     if guild is None:
         logger.error("Guild %s not found – skipping daily task.", GUILD_ID)
         return
@@ -427,9 +428,16 @@ async def daily_task():
 # ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
-@client.event
+@bot.event
 async def on_ready():
-    logger.info("Bot is online as %s (ID: %s).", client.user, client.user.id)
+    logger.info("Bot is online as %s (ID: %s).", bot.user, bot.user.id)
+
+    # Load voting cog and sync slash commands
+    if not bot.get_cog("VotingCog"):
+        await bot.load_extension("voting")
+        await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
+        logger.info("Voting cog loaded and slash commands synced.")
+
     if not daily_task.is_running():
         daily_task.start()
         logger.info(
@@ -449,4 +457,4 @@ if __name__ == "__main__":
         logger.critical("EV_API_KEY is not set. Exiting.")
         raise SystemExit(1)
 
-    client.run(DISCORD_TOKEN, log_handler=None)
+    bot.run(DISCORD_TOKEN, log_handler=None)

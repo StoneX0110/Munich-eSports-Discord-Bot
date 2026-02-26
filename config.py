@@ -24,17 +24,20 @@ GUILD_ID = 615552039027736595
 MEMBERSHIP_ROLE_ID = 615555478210215936
 GENERAL_CHANNEL_ID = 626072050989006859       # #general – birthdays & welcomes
 MEMBER_CHANNEL_ID = 615563862426648580        # #member-general – anniversaries
+DEPARTMENT_HEAD_ROLE_ID = 748509968172449802  # "Abteilungsleiter"
 
 # ---------------------------------------------------------------------------
 # easyVerein custom field IDs
 # ---------------------------------------------------------------------------
 DISCORD_ID_FIELD_ID = 34867055        # "Discord-ID" – stores Discord user ID or tag
 BIRTHDAY_CONSENT_FIELD_ID = 177910549  # "Zustimmung Geburtstagswünsche" – checkbox
+ABTEILUNGEN_FIELD_ID = 34866629       # "Abteilungen" – multi-select department membership
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 KNOWN_MEMBERS_FILE = Path(__file__).resolve().parent / "known_members.json"
+VOTES_FILE = Path(__file__).resolve().parent / "votes.json"
 
 # ---------------------------------------------------------------------------
 # Schedule
