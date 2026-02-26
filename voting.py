@@ -448,7 +448,7 @@ class VotingCog(commands.Cog):
         scope = f"für **{department}**" if department else "für **alle Mitglieder**"
         await interaction.response.send_message(
             f"✅ **Wahlsitzung #{session_id}** {scope} erstellt!\n"
-            f"Nutze `/vote delegate` um Delegiertenstimmen festzulegen, "
+            f"Nutze `/session delegate` um Delegiertenstimmen festzulegen, "
             f"dann `/vote start` um Abstimmungen zu erstellen."
         )
 
@@ -679,43 +679,27 @@ class VotingCog(commands.Cog):
             return
         data, session, sid = result
 
-        # Close all active votes in this session
-        closed_votes = []
-        for vote_id, vote in data["votes"].items():
-            if str(vote.get("session_id")) == sid and vote.get("active"):
-                vote["active"] = False
-                closed_votes.append(vote_id)
-
-                # Try to update original message
-                try:
-                    channel = self.bot.get_channel(vote["channel_id"])
-                    if channel:
-                        original_msg = await channel.fetch_message(vote["message_id"])
-                        if original_msg.embeds:
-                            closed_embed = original_msg.embeds[0]
-                            closed_embed.description = closed_embed.description.replace(
-                                "**Status:** 🟢 Offen", "**Status:** 🔴 Geschlossen"
-                            )
-                            closed_embed.color = discord.Color.red()
-                            await original_msg.edit(embed=closed_embed, view=None)
-                except Exception:
-                    logger.exception("Failed to update vote message for vote #%s.", vote_id)
+        # Check for open votes – refuse if any remain
+        open_votes = [
+            vid for vid, v in data["votes"].items()
+            if str(v.get("session_id")) == sid and v.get("active")
+        ]
+        if open_votes:
+            votes_str = ", ".join(f"#{v}" for v in open_votes)
+            await interaction.response.send_message(
+                f"❌ Es gibt noch offene Abstimmungen: {votes_str}\n"
+                f"Bitte schließe diese zuerst mit `/vote close`.",
+                ephemeral=True,
+            )
+            return
 
         # Close the session
         session["active"] = False
         _save_data(data)
 
-        if closed_votes:
-            votes_str = ", ".join(f"#{v}" for v in closed_votes)
-            await interaction.response.send_message(
-                f"✅ Wahlsitzung #{session_id} beendet.\n"
-                f"Folgende Abstimmungen wurden geschlossen: {votes_str}\n"
-                f"Nutze `/vote close` für die einzelnen Ergebnisse."
-            )
-        else:
-            await interaction.response.send_message(
-                f"✅ Wahlsitzung #{session_id} beendet (keine offenen Abstimmungen vorhanden)."
-            )
+        await interaction.response.send_message(
+            f"✅ Wahlsitzung #{session_id} beendet."
+        )
 
         logger.info("Session #%s ended by %s.", sid, interaction.user)
 
