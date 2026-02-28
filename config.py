@@ -25,6 +25,15 @@ MEMBERSHIP_ROLE_ID = 615555478210215936
 GENERAL_CHANNEL_ID = 626072050989006859       # #general – birthdays & welcomes
 MEMBER_CHANNEL_ID = 615563862426648580        # #member-general – anniversaries
 DEPARTMENT_HEAD_ROLE_ID = 748509968172449802  # "Abteilungsleiter"
+DEPARTMENT_ROLES = {
+    615553053042540564: "Counter Strike",
+    748502331661746247: "League Of Legends",
+    748502603121295382: "Smash",
+    748502802761777182: "Rocket League",
+    1360191097359564982: "TCG",
+    748502652069085264: "VALORANT",
+    748503435040522320: "Verwaltung",
+}
 
 # ---------------------------------------------------------------------------
 # easyVerein custom field IDs

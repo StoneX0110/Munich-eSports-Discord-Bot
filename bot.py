@@ -435,8 +435,16 @@ async def on_ready():
     # Load voting cog and sync slash commands
     if not bot.get_cog("VotingCog"):
         await bot.load_extension("voting")
-        await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
-        logger.info("Voting cog loaded and slash commands synced.")
+        logger.info("Voting cog loaded.")
+
+    # Load department cog
+    if not bot.get_cog("DepartmentCog"):
+        await bot.load_extension("department")
+        logger.info("Department cog loaded.")
+
+    # Sync all slash commands to the guild
+    await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
+    logger.info("Slash commands synced.")
 
     if not daily_task.is_running():
         daily_task.start()
