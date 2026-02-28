@@ -9,7 +9,7 @@ import json
 import logging
 import random
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
+from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
 
 import discord
@@ -48,19 +48,52 @@ _LOG_DIR.mkdir(exist_ok=True)
 
 # Console handler
 logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
+_formatter = logging.Formatter(_LOG_FORMAT)
 
-# Rotating file handler (5 MB per file, 5 backups)
-_file_handler = RotatingFileHandler(
+# 1. Main Bot & Everything Else Logger (Daily rotation)
+class _BotLogFilter(logging.Filter):
+    def filter(self, record):
+        # Exclude voting and department logs from bot.log
+        if record.name.startswith("munich_esports_bot.voting") or \
+           record.name.startswith("munich_esports_bot.department"):
+            return False
+        return True
+
+_bot_handler = TimedRotatingFileHandler(
     _LOG_DIR / "bot.log",
+    when="midnight",
+    interval=1,
+    backupCount=14,  # Keep logs for 14 days
+    encoding="utf-8",
+)
+_bot_handler.setLevel(logging.INFO)
+_bot_handler.setFormatter(_formatter)
+_bot_handler.addFilter(_BotLogFilter())
+
+logging.getLogger().addHandler(_bot_handler)  # attach to root logger
+logger = logging.getLogger("munich_esports_bot")
+
+# 2. Voting Logger (Voting + Session commands)
+_voting_handler = RotatingFileHandler(
+    _LOG_DIR / "voting.log",
     maxBytes=5 * 1024 * 1024,
     backupCount=5,
     encoding="utf-8",
 )
-_file_handler.setLevel(logging.INFO)
-_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+_voting_handler.setLevel(logging.INFO)
+_voting_handler.setFormatter(_formatter)
+logging.getLogger("munich_esports_bot.voting").addHandler(_voting_handler)
 
-logging.getLogger().addHandler(_file_handler)  # attach to root logger
-logger = logging.getLogger("munich_esports_bot")
+# 3. Department Logger (Department commands)
+_dept_handler = RotatingFileHandler(
+    _LOG_DIR / "department.log",
+    maxBytes=5 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8",
+)
+_dept_handler.setLevel(logging.INFO)
+_dept_handler.setFormatter(_formatter)
+logging.getLogger("munich_esports_bot.department").addHandler(_dept_handler)
 
 # ---------------------------------------------------------------------------
 # Discord bot setup
@@ -68,7 +101,7 @@ logger = logging.getLogger("munich_esports_bot")
 intents = discord.Intents.default()
 intents.members = True  # Required to iterate guild members & resolve tags
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
 
 # ---------------------------------------------------------------------------
 # easyVerein client (with automatic token refresh)
