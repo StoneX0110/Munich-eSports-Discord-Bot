@@ -2,6 +2,7 @@
 Department-related commands for the Munich eSports Discord bot.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -26,8 +27,7 @@ class DepartmentCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        from bot import ev_client
-        self.ev_client = ev_client
+        self.ev_client = bot.ev_client
 
     abteilung_group = app_commands.Group(
         name="abteilung",
@@ -64,10 +64,14 @@ class DepartmentCog(commands.Cog):
 
         try:
             search_indefinite = MemberFilter(resignationDate__isnull=True, isApplication=False)
-            members_indefinite = self.ev_client.member.get_all(query=query, search=search_indefinite)
+            members_indefinite = await asyncio.to_thread(
+                self.ev_client.member.get_all, query=query, search=search_indefinite,
+            )
 
             search_future_resignation = MemberFilter(resignationDate__gte=today, isApplication=False)
-            members_resigning = self.ev_client.member.get_all(query=query, search=search_future_resignation)
+            members_resigning = await asyncio.to_thread(
+                self.ev_client.member.get_all, query=query, search=search_future_resignation,
+            )
 
             # Deduplicate by ID
             active_members = list({m.id: m for m in members_indefinite + members_resigning}.values())

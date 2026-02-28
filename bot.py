@@ -5,6 +5,7 @@ Syncs club membership roles from easyVerein, sends birthday greetings,
 welcomes new club members, and celebrates membership anniversaries.
 """
 
+import asyncio
 import json
 import logging
 import random
@@ -125,6 +126,7 @@ ev_client = EasyvereinAPI(
     token_refresh_callback=_handle_token_refresh,
     auto_refresh_token=True,
 )
+bot.ev_client = ev_client
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +213,10 @@ async def _update_ev_discord_id(ev_member: Member, discord_user_id: str) -> None
     Update the Discord-ID custom field in easyVerein with the numeric user ID.
     """
     try:
-        member_cf = ev_client.member.custom_field(ev_member.id)
-        member_cf.ensure_set(DISCORD_ID_FIELD_ID, discord_user_id)
+        def _do_update():
+            member_cf = ev_client.member.custom_field(ev_member.id)
+            member_cf.ensure_set(DISCORD_ID_FIELD_ID, discord_user_id)
+        await asyncio.to_thread(_do_update)
         logger.info(
             "Updated easyVerein Discord-ID for member %s to %s",
             ev_member.id,
@@ -266,14 +270,14 @@ async def daily_task():
             resignationDate__isnull=True,
             isApplication=False,
         )
-        members_indefinite = ev_client.member.get_all(query=query, search=search_indefinite)
+        members_indefinite = await asyncio.to_thread(ev_client.member.get_all, query=query, search=search_indefinite)
 
         # 2. Members with FUTURE resignation date (still active until that date)
         search_future_resignation = MemberFilter(
             resignationDate__gte=today,
             isApplication=False,
         )
-        members_resigning = ev_client.member.get_all(query=query, search=search_future_resignation)
+        members_resigning = await asyncio.to_thread(ev_client.member.get_all, query=query, search=search_future_resignation)
 
         # Combine both lists (using a dict by ID to deduplicate just in case)
         ev_members_map = {m.id: m for m in members_indefinite + members_resigning}
@@ -461,23 +465,21 @@ async def daily_task():
 # ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
+async def _setup_hook():
+    """Load extensions and sync commands – runs once before on_ready."""
+    await bot.load_extension("voting")
+    logger.info("Voting cog loaded.")
+    await bot.load_extension("department")
+    logger.info("Department cog loaded.")
+    await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
+    logger.info("Slash commands synced.")
+
+bot.setup_hook = _setup_hook
+
+
 @bot.event
 async def on_ready():
     logger.info("Bot is online as %s (ID: %s).", bot.user, bot.user.id)
-
-    # Load voting cog and sync slash commands
-    if not bot.get_cog("VotingCog"):
-        await bot.load_extension("voting")
-        logger.info("Voting cog loaded.")
-
-    # Load department cog
-    if not bot.get_cog("DepartmentCog"):
-        await bot.load_extension("department")
-        logger.info("Department cog loaded.")
-
-    # Sync all slash commands to the guild
-    await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
-    logger.info("Slash commands synced.")
 
     if not daily_task.is_running():
         daily_task.start()
