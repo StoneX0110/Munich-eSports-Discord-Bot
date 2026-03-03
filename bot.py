@@ -36,8 +36,11 @@ from config import (
 from messages import (
     ANNIVERSARY_MESSAGES_1Y,
     ANNIVERSARY_MESSAGES_NY,
+    ANNIVERSARY_MESSAGES_MULTIPLE,
     BIRTHDAY_MESSAGES,
+    BIRTHDAY_MESSAGES_MULTIPLE,
     WELCOME_MESSAGES,
+    WELCOME_MESSAGES_MULTIPLE,
 )
 
 # ---------------------------------------------------------------------------
@@ -230,7 +233,7 @@ async def _update_ev_discord_id(ev_member: Member, discord_user_id: str) -> None
 
 
 # ---------------------------------------------------------------------------
-# Daily task – membership sync, birthdays, welcomes, anniversaries
+# Daily task - membership sync, birthdays, welcomes, anniversaries
 # ---------------------------------------------------------------------------
 @tasks.loop(time=DAILY_RUN_TIME)
 async def daily_task():
@@ -239,12 +242,12 @@ async def daily_task():
 
     guild = bot.get_guild(GUILD_ID)
     if guild is None:
-        logger.error("Guild %s not found – skipping daily task.", GUILD_ID)
+        logger.error("Guild %s not found - skipping daily task.", GUILD_ID)
         return
 
     membership_role = guild.get_role(MEMBERSHIP_ROLE_ID)
     if membership_role is None:
-        logger.error("Membership role %s not found – skipping.", MEMBERSHIP_ROLE_ID)
+        logger.error("Membership role %s not found - skipping.", MEMBERSHIP_ROLE_ID)
         return
 
     general_channel = guild.get_channel(GENERAL_CHANNEL_ID)
@@ -374,16 +377,24 @@ async def daily_task():
     # Birthday greetings (in #general)
     # ------------------------------------------------------------------
     if general_channel and birthday_discord_ids:
+        birthday_members = []
         for uid in birthday_discord_ids:
             member = guild.get_member(uid)
-            if member is None:
-                continue
-            message = random.choice(BIRTHDAY_MESSAGES).format(mention=member.mention)
+            if member:
+                birthday_members.append(member)
+        
+        if birthday_members:
+            if len(birthday_members) == 1:
+                message = random.choice(BIRTHDAY_MESSAGES).format(mention=birthday_members[0].mention)
+            else:
+                members_list = "\n".join(f"- {m.mention}" for m in birthday_members)
+                message = random.choice(BIRTHDAY_MESSAGES_MULTIPLE).format(members=members_list)
+
             try:
                 await general_channel.send(message)
-                logger.info("Sent birthday greeting to %s (%s).", member, uid)
+                logger.info("Sent birthday greeting(s) for %d member(s).", len(birthday_members))
             except discord.HTTPException:
-                logger.exception("Failed to send birthday greeting to %s.", member)
+                logger.exception("Failed to send birthday greeting(s).")
 
     # ------------------------------------------------------------------
     # New club member welcome messages (in #general)
@@ -402,28 +413,28 @@ async def daily_task():
             if new_member_ids:
                 logger.info("Detected %d new club member(s).", len(new_member_ids))
 
+            new_discord_members = []
             for ev_member in ev_members:
                 if ev_member.id not in new_member_ids:
                     continue
 
                 discord_member = ev_to_discord.get(ev_member.id)
-                if discord_member is None:
-                    continue
+                if discord_member:
+                    new_discord_members.append(discord_member)
 
-                message = random.choice(WELCOME_MESSAGES).format(
-                    mention=discord_member.mention
-                )
+            if new_discord_members:
+                if len(new_discord_members) == 1:
+                    m = new_discord_members[0]
+                    message = random.choice(WELCOME_MESSAGES).format(mention=m.mention)
+                else:
+                    members_list = "\n".join(f"- {m.mention}" for m in new_discord_members)
+                    message = random.choice(WELCOME_MESSAGES_MULTIPLE).format(members=members_list)
+
                 try:
                     await general_channel.send(message)
-                    logger.info(
-                        "Sent welcome message for new club member %s (%s).",
-                        discord_member,
-                        discord_member.id,
-                    )
+                    logger.info("Sent welcome message(s) for %d member(s).", len(new_discord_members))
                 except discord.HTTPException:
-                    logger.exception(
-                        "Failed to send welcome message for %s.", discord_member
-                    )
+                    logger.exception("Failed to send welcome message(s).")
 
         _save_known_members(current_ids)
 
@@ -431,6 +442,7 @@ async def daily_task():
     # Membership anniversary shoutouts (in #member-general)
     # ------------------------------------------------------------------
     if member_channel:
+        anniversaries_by_year = {}
         for ev_member in ev_members:
             if not ev_member.joinDate:
                 continue
@@ -439,25 +451,35 @@ async def daily_task():
                 years = today.year - jd.year
 
                 discord_member = ev_to_discord.get(ev_member.id)
-                if discord_member is None:
-                    continue
+                if discord_member:
+                    anniversaries_by_year.setdefault(years, []).append(discord_member)
 
+        if anniversaries_by_year:
+            total_anniversaries = sum(len(m) for m in anniversaries_by_year.values())
+            
+            if total_anniversaries == 1:
+                years = next(iter(anniversaries_by_year.keys()))
+                discord_member = anniversaries_by_year[years][0]
                 templates = ANNIVERSARY_MESSAGES_1Y if years == 1 else ANNIVERSARY_MESSAGES_NY
-                message = random.choice(templates).format(
-                    mention=discord_member.mention, years=years
-                )
-                try:
-                    await member_channel.send(message)
-                    logger.info(
-                        "Sent anniversary message to %s (%s) – %d year(s).",
-                        discord_member,
-                        discord_member.id,
-                        years,
-                    )
-                except discord.HTTPException:
-                    logger.exception(
-                        "Failed to send anniversary message to %s.", discord_member
-                    )
+                message = random.choice(templates).format(mention=discord_member.mention, years=years)
+            else:
+                anniversary_lines = []
+                for years in sorted(anniversaries_by_year.keys()):
+                    members = anniversaries_by_year[years]
+                    mentions_str = ", ".join(m.mention for m in members)
+                    if years == 1:
+                        anniversary_lines.append(f"- 1 Jahr: {mentions_str}")
+                    else:
+                        anniversary_lines.append(f"- {years} Jahre: {mentions_str}")
+                
+                members_list = "\n".join(anniversary_lines)
+                message = random.choice(ANNIVERSARY_MESSAGES_MULTIPLE).format(members=members_list)
+
+            try:
+                await member_channel.send(message)
+                logger.info("Sent anniversary message(s) for %d member(s).", total_anniversaries)
+            except discord.HTTPException:
+                logger.exception("Failed to send anniversary message(s).")
 
     logger.info("Daily task finished.")
 
@@ -466,7 +488,7 @@ async def daily_task():
 # Events
 # ---------------------------------------------------------------------------
 async def _setup_hook():
-    """Load extensions and sync commands – runs once before on_ready."""
+    """Load extensions and sync commands - runs once before on_ready."""
     await bot.load_extension("voting")
     logger.info("Voting cog loaded.")
     await bot.load_extension("department")

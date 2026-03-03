@@ -108,3 +108,36 @@ ANNIVERSARY_MESSAGES_NY = [
     "⚔️ {mention} ist seit {years} Jahren im Kampf dabei! Alles Gute zum Jubiläum! ⚔️",
     "👑 Alles Gute zum {years}-jährigen Jubiläum, {mention}! Lang lebe die Legende! 👑",
 ]
+
+# ---------------------------------------------------------------------------
+# Multiple Birthday greeting messages
+# ---------------------------------------------------------------------------
+BIRTHDAY_MESSAGES_MULTIPLE = [
+    "🎂 Herzlichen Glückwunsch an unsere heutigen Geburtstagskinder! 🎉 Das Team von Munich eSports wünscht euch einen wundervollen Tag!\n{members}",
+    "🥳 Wir haben heute gleich mehrere Geburtstage zu feiern! Habt einen fantastischen Tag! 🎈🎁\n{members}",
+    "🎉 Alles Gute zum Geburtstag an euch alle! Möge euer Tag voller GGs und epischer Siege sein! 🏆\n{members}",
+    "🎶 Wir haben gleich mehrere Gründe zum Feiern! Alles Gute zum Geburtstag von ganz Munich eSports an:\n{members}",
+    "🎁 Alles Gute zum Geburtstag an unsere Geburtstagskinder! Wir wünschen euch einen Tag voller Clutch-Plays und guter Vibes! 🎯🥳\n{members}",
+]
+
+# ---------------------------------------------------------------------------
+# Multiple Welcome messages for new club members
+# ---------------------------------------------------------------------------
+WELCOME_MESSAGES_MULTIPLE = [
+    "🎉 Willkommen bei Munich eSports! Schön, euch als offizielle Vereinsmitglieder dabei zu haben! 🏆\n{members}",
+    "🙌 Einige neue Gamer sind gerade Munich eSports als Vereinsmitglieder beigetreten! Willkommen an Bord! 🎮\n{members}",
+    "🥳 Ein herzliches Willkommen an unsere neuesten Vereinsmitglieder! Auf geht's! 🚀\n{members}",
+    "📢 Achtung alle: Wir haben neue Vereinsmitglieder! Willkommen im Club! 📣\n{members}",
+    "🌟 Wieder wächst unsere Familie! Willkommen im Club an unsere neuen Mitglieder! 🎖️\n{members}",
+]
+
+# ---------------------------------------------------------------------------
+# Multiple Anniversary messages
+# ---------------------------------------------------------------------------
+ANNIVERSARY_MESSAGES_MULTIPLE = [
+    "🎖️ Wir feiern heute wieder Vereinsjubiläen! Herzlichen Glückwunsch an:\n{members}",
+    "🥳 Ein weiteres Jahr voller GGs! Alles Gute zum Vereinsjubiläum an:\n{members}",
+    "🎂 Es ist fantastisch, euch alle auf dieser Reise dabei zu haben! Wir feiern die Jubiläen von:\n{members}",
+    "🏆 Ihr seid Legenden! Lasst uns die heutigen Jubiläen feiern:\n{members}",
+    "✨ Danke für eure Treue! Wir gratulieren zum Jubiläum:\n{members}",
+]
