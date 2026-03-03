@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import random
+import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
@@ -238,7 +239,8 @@ async def _update_ev_discord_id(ev_member: Member, discord_user_id: str) -> None
 @tasks.loop(time=DAILY_RUN_TIME)
 async def daily_task():
     """Runs once per day at 08:00 CET: sync roles, birthdays, welcomes, anniversaries."""
-    logger.info("Daily task started.")
+    dry_run = getattr(bot, "dry_run", False)
+    logger.info("Daily task started. (dry_run=%s)", dry_run)
 
     guild = bot.get_guild(GUILD_ID)
     if guild is None:
@@ -338,22 +340,30 @@ async def daily_task():
         is_active = member.id in active_discord_ids
 
         if is_active and not has_role:
-            try:
-                await member.add_roles(membership_role, reason="easyVerein membership sync")
+            if dry_run:
+                logger.info("DRY RUN: Would add membership role to %s (%s).", member, member.id)
                 roles_added += 1
-                logger.info("Added membership role to %s (%s).", member, member.id)
-            except discord.HTTPException:
-                logger.exception("Failed to add role to %s.", member)
+            else:
+                try:
+                    await member.add_roles(membership_role, reason="easyVerein membership sync")
+                    roles_added += 1
+                    logger.info("Added membership role to %s (%s).", member, member.id)
+                except discord.HTTPException:
+                    logger.exception("Failed to add role to %s.", member)
 
         elif not is_active and has_role:
             if member.bot:
                 continue
-            try:
-                await member.remove_roles(membership_role, reason="easyVerein membership sync")
+            if dry_run:
+                logger.info("DRY RUN: Would remove membership role from %s (%s).", member, member.id)
                 roles_removed += 1
-                logger.info("Removed membership role from %s (%s).", member, member.id)
-            except discord.HTTPException:
-                logger.exception("Failed to remove role from %s.", member)
+            else:
+                try:
+                    await member.remove_roles(membership_role, reason="easyVerein membership sync")
+                    roles_removed += 1
+                    logger.info("Removed membership role from %s (%s).", member, member.id)
+                except discord.HTTPException:
+                    logger.exception("Failed to remove role from %s.", member)
 
     logger.info(
         "Role sync complete: %d added, %d removed.",
@@ -365,7 +375,10 @@ async def daily_task():
     # Update easyVerein for resolved tags → numeric IDs
     # ------------------------------------------------------------------
     for ev_member, discord_member in tag_resolved:
-        await _update_ev_discord_id(ev_member, str(discord_member.id))
+        if dry_run:
+            logger.info("DRY RUN: Would update EV Discord-ID for %s to %s.", ev_member.id, discord_member.id)
+        else:
+            await _update_ev_discord_id(ev_member, str(discord_member.id))
 
     if tag_resolved:
         logger.info(
@@ -390,11 +403,14 @@ async def daily_task():
                 members_list = "\n".join(f"- {m.mention}" for m in birthday_members)
                 message = random.choice(BIRTHDAY_MESSAGES_MULTIPLE).format(members=members_list)
 
-            try:
-                await general_channel.send(message)
-                logger.info("Sent birthday greeting(s) for %d member(s).", len(birthday_members))
-            except discord.HTTPException:
-                logger.exception("Failed to send birthday greeting(s).")
+            if dry_run:
+                logger.info("DRY RUN: Would send birthday greeting(s) for %d member(s). Message:\n%s", len(birthday_members), message)
+            else:
+                try:
+                    await general_channel.send(message)
+                    logger.info("Sent birthday greeting(s) for %d member(s).", len(birthday_members))
+                except discord.HTTPException:
+                    logger.exception("Failed to send birthday greeting(s).")
 
     # ------------------------------------------------------------------
     # New club member welcome messages (in #general)
@@ -430,13 +446,19 @@ async def daily_task():
                     members_list = "\n".join(f"- {m.mention}" for m in new_discord_members)
                     message = random.choice(WELCOME_MESSAGES_MULTIPLE).format(members=members_list)
 
-                try:
-                    await general_channel.send(message)
-                    logger.info("Sent welcome message(s) for %d member(s).", len(new_discord_members))
-                except discord.HTTPException:
-                    logger.exception("Failed to send welcome message(s).")
+                if dry_run:
+                    logger.info("DRY RUN: Would send welcome message(s) for %d member(s). Message:\n%s", len(new_discord_members), message)
+                else:
+                    try:
+                        await general_channel.send(message)
+                        logger.info("Sent welcome message(s) for %d member(s).", len(new_discord_members))
+                    except discord.HTTPException:
+                        logger.exception("Failed to send welcome message(s).")
 
-        _save_known_members(current_ids)
+        if dry_run:
+            logger.info("DRY RUN: Would save %d known member IDs to %s.", len(current_ids), KNOWN_MEMBERS_FILE)
+        else:
+            _save_known_members(current_ids)
 
     # ------------------------------------------------------------------
     # Membership anniversary shoutouts (in #member-general)
@@ -475,11 +497,14 @@ async def daily_task():
                 members_list = "\n".join(anniversary_lines)
                 message = random.choice(ANNIVERSARY_MESSAGES_MULTIPLE).format(members=members_list)
 
-            try:
-                await member_channel.send(message)
-                logger.info("Sent anniversary message(s) for %d member(s).", total_anniversaries)
-            except discord.HTTPException:
-                logger.exception("Failed to send anniversary message(s).")
+            if dry_run:
+                logger.info("DRY RUN: Would send anniversary message(s) for %d member(s). Message:\n%s", total_anniversaries, message)
+            else:
+                try:
+                    await member_channel.send(message)
+                    logger.info("Sent anniversary message(s) for %d member(s).", total_anniversaries)
+                except discord.HTTPException:
+                    logger.exception("Failed to send anniversary message(s).")
 
     logger.info("Daily task finished.")
 
@@ -503,6 +528,13 @@ bot.setup_hook = _setup_hook
 async def on_ready():
     logger.info("Bot is online as %s (ID: %s).", bot.user, bot.user.id)
 
+    if getattr(bot, "dry_run", False):
+        logger.info("Executing dry-run...")
+        await daily_task()
+        logger.info("Dry-run complete. Shutting down.")
+        await bot.close()
+        return
+
     if not daily_task.is_running():
         daily_task.start()
         logger.info(
@@ -515,6 +547,9 @@ async def on_ready():
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    if "--dry-run" in sys.argv:
+        bot.dry_run = True
+
     if not DISCORD_TOKEN:
         logger.critical("DISCORD_TOKEN is not set. Exiting.")
         raise SystemExit(1)
