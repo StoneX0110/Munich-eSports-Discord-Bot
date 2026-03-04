@@ -8,6 +8,7 @@ session-based delegated votes, verified via easyVerein department membership.
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -103,6 +104,34 @@ def _build_result_bar(count: int, total: int, bar_length: int = 10) -> str:
     return f"{bar} {count} ({pct:.1f}%)"
 
 
+async def _update_vote_embed(bot: commands.Bot, vote: dict) -> None:
+    """Update the original vote embed to reflect the current total vote count."""
+    try:
+        channel = bot.get_channel(vote["channel_id"])
+        if not channel or not vote.get("message_id"):
+            return
+        msg = await channel.fetch_message(vote["message_id"])
+        if not msg.embeds:
+            return
+        embed = msg.embeds[0]
+
+        total = sum(vote["tallies"].values())
+
+        # Only update if the new total exceeds the currently displayed one
+        # to avoid stale overwrites from concurrent voters
+        counter_pattern = re.compile(r"🗳️ \*\*Abgegebene Stimmen:\*\* (\d+)")
+        match = counter_pattern.search(embed.description)
+        if match and int(match.group(1)) >= total:
+            return
+
+        embed.description = counter_pattern.sub(
+            f"🗳️ **Abgegebene Stimmen:** {total}", embed.description,
+        )
+        await msg.edit(embed=embed)
+    except Exception:
+        logger.exception("Failed to update vote embed with live counter.")
+
+
 async def _get_vote(
     vote_id: str | int,
     interaction: discord.Interaction,
@@ -196,6 +225,7 @@ async def _record_votes(
 
         _save_data(data)
         new_remaining = remaining - count
+        vote_snapshot = dict(vote)  # snapshot for embed update outside lock
 
     # Send confirmation (outside lock)
     if new_remaining > 0:
@@ -213,6 +243,10 @@ async def _record_votes(
         await interaction.followup.send(msg, ephemeral=True)
     else:
         await interaction.response.send_message(msg, ephemeral=True)
+
+    # Update the live vote counter on the overview embed
+    await _update_vote_embed(interaction.client, vote_snapshot)
+
     return True
 
 
@@ -650,6 +684,7 @@ class VotingCog(commands.Cog):
                 f"**Status:** 🟢 Offen\n\n"
                 f"**Optionen:**\n"
                 + "\n".join(f"• {opt}" for opt in option_list)
+                + f"\n\n🗳️ **Abgegebene Stimmen:** 0"
             ),
             color=discord.Color.blue(),
             timestamp=datetime.now(ZoneInfo("Europe/Berlin")),
