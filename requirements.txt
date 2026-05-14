@@ -1,4 +1,4 @@
-discord.py>=2.3
+discord.py>=2.7
 python-easyverein>=2.3
 python-dotenv>=1.2.1
 tzdata
