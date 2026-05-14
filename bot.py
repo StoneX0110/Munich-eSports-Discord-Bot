@@ -518,6 +518,8 @@ async def _setup_hook():
     logger.info("Voting cog loaded.")
     await bot.load_extension("department")
     logger.info("Department cog loaded.")
+    await bot.load_extension("honeypot")
+    logger.info("Honeypot cog loaded.")
     await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
     logger.info("Slash commands synced.")
 
