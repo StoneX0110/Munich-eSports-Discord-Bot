@@ -8,6 +8,7 @@ session-based delegated votes, verified via easyVerein department membership.
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -34,36 +35,43 @@ GUILD_OBJ = discord.Object(id=GUILD_ID)
 _data_lock = asyncio.Lock()
 _active_voters: dict[str, set[str]] = {}  # vote_id → set of user_ids with open dialogs
 
+# In-memory data store – loaded once at startup, flushed on admin commands
+_data: dict | None = None
+
 
 # ---------------------------------------------------------------------------
 # Persistence helpers
 # ---------------------------------------------------------------------------
 
-def _load_data() -> dict:
-    """Load the votes/sessions data from disk."""
+def _default_data() -> dict:
+    """Return the default empty data structure."""
+    return {
+        "next_session_id": 1,
+        "next_vote_id": 1,
+        "sessions": {},
+        "votes": {},
+    }
+
+
+def _init_data() -> None:
+    """Load the votes/sessions data from disk into memory (called once at startup)."""
+    global _data
     if not VOTES_FILE.exists():
-        return {
-            "next_session_id": 1,
-            "next_vote_id": 1,
-            "sessions": {},
-            "votes": {},
-        }
+        _data = _default_data()
+        return
     try:
-        return json.loads(VOTES_FILE.read_text(encoding="utf-8"))
+        _data = json.loads(VOTES_FILE.read_text(encoding="utf-8"))
     except Exception:
         logger.exception("Failed to load %s – starting fresh.", VOTES_FILE)
-        return {
-            "next_session_id": 1,
-            "next_vote_id": 1,
-            "sessions": {},
-            "votes": {},
-        }
+        _data = _default_data()
 
 
-def _save_data(data: dict) -> None:
-    """Persist the votes/sessions data to disk."""
+def _flush_data() -> None:
+    """Persist the in-memory data to disk."""
+    if _data is None:
+        return
     try:
-        VOTES_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        VOTES_FILE.write_text(json.dumps(_data, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception:
         logger.exception("Failed to save %s.", VOTES_FILE)
 
@@ -83,12 +91,12 @@ def _now_iso() -> str:
 
 def _max_votes_for_user(session: dict, user_id: str) -> int:
     """Return the total number of votes a user may cast (1 own + delegated)."""
-    return 1 + session.get("delegated_votes", {}).get(user_id, 0)
+    return 1 + session["delegated_votes"].get(user_id, 0)
 
 
 def _votes_used_by_user(vote: dict, user_id: str) -> int:
     """Return how many votes the user has already cast in this vote."""
-    return vote.get("votes_used", {}).get(user_id, 0)
+    return vote["votes_used"].get(user_id, 0)
 
 
 def _remaining_votes(session: dict, vote: dict, user_id: str) -> int:
@@ -103,11 +111,39 @@ def _build_result_bar(count: int, total: int, bar_length: int = 10) -> str:
     return f"{bar} {count} ({pct:.1f}%)"
 
 
+async def _update_vote_embed(bot: commands.Bot, vote: dict) -> None:
+    """Update the original vote embed to reflect the current total vote count."""
+    try:
+        channel = bot.get_channel(vote["channel_id"])
+        if not channel or not vote.get("message_id"):
+            return
+        msg = await channel.fetch_message(vote["message_id"])
+        if not msg.embeds:
+            return
+        embed = msg.embeds[0]
+
+        total = sum(vote["tallies"].values())
+
+        # Only update if the new total exceeds the currently displayed one
+        # to avoid stale overwrites from concurrent voters
+        counter_pattern = re.compile(r"🗳️ \*\*Abgegebene Stimmen:\*\* (\d+)")
+        match = counter_pattern.search(embed.description)
+        if match and int(match.group(1)) >= total:
+            return
+
+        embed.description = counter_pattern.sub(
+            f"🗳️ **Abgegebene Stimmen:** {total}", embed.description,
+        )
+        await msg.edit(embed=embed)
+    except Exception:
+        logger.exception("Failed to update vote embed with live counter.")
+
+
 async def _get_vote(
     vote_id: str | int,
     interaction: discord.Interaction,
-) -> tuple[dict, dict, dict] | None:
-    """Load data and return (data, vote, session) for an active vote.
+) -> tuple[dict, dict] | None:
+    """Return (vote, session) for an active vote.
 
     Sends an ephemeral error to *interaction* and returns None on failure.
     """
@@ -117,35 +153,33 @@ async def _get_vote(
         else:
             await interaction.response.send_message(msg, ephemeral=True)
 
-    data = _load_data()
-    vote = data["votes"].get(str(vote_id))
+    vote = _data["votes"].get(str(vote_id))
     if not vote:
         await _send_error(f"❌ Abstimmung #{vote_id} nicht gefunden.")
         return None
     if not vote.get("active"):
         await _send_error("❌ Diese Abstimmung ist nicht mehr aktiv.")
         return None
-    session = data["sessions"].get(str(vote["session_id"]), {})
-    return data, vote, session
+    session = _data["sessions"][str(vote["session_id"])]
+    return vote, session
 
 
 async def _get_active_session(
     session_id: int, interaction: discord.Interaction,
-) -> tuple[dict, dict, str] | None:
-    """Load data and return (data, session, sid) if the session exists and is active.
+) -> tuple[dict, str] | None:
+    """Return (session, sid) if the session exists and is active.
 
     Sends an ephemeral error to *interaction* and returns None otherwise.
     """
-    data = _load_data()
     sid = str(session_id)
-    session = data["sessions"].get(sid)
+    session = _data["sessions"].get(sid)
     if not session or not session.get("active"):
         await interaction.response.send_message(
             f"❌ Wahlsitzung #{session_id} nicht gefunden oder bereits beendet.",
             ephemeral=True,
         )
         return None
-    return data, session, sid
+    return session, sid
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +199,7 @@ async def _record_votes(
         result = await _get_vote(vote_id, interaction)
         if not result:
             return False
-        data, vote, session = result
+        vote, session = result
         user_id = str(interaction.user.id)
 
         # Re-check remaining votes to prevent over-voting
@@ -186,16 +220,15 @@ async def _record_votes(
         # Cap count at remaining votes
         count = min(count, remaining)
 
-        # Update tallies
-        vote["tallies"][option] = vote["tallies"].get(option, 0) + count
+        # Update tallies (in-memory only – flushed on vote close)
+        vote["tallies"][option] += count
 
         # Update votes_used
-        if "votes_used" not in vote:
-            vote["votes_used"] = {}
-        vote["votes_used"][user_id] = vote["votes_used"].get(user_id, 0) + count
+        vote["votes_used"].setdefault(user_id, 0)
+        vote["votes_used"][user_id] += count
 
-        _save_data(data)
         new_remaining = remaining - count
+        vote_snapshot = dict(vote)  # snapshot for embed update outside lock
 
     # Send confirmation (outside lock)
     if new_remaining > 0:
@@ -213,6 +246,10 @@ async def _record_votes(
         await interaction.followup.send(msg, ephemeral=True)
     else:
         await interaction.response.send_message(msg, ephemeral=True)
+
+    # Update the live vote counter on the overview embed
+    await _update_vote_embed(interaction.client, vote_snapshot)
+
     return True
 
 
@@ -237,7 +274,7 @@ class VoteView(discord.ui.View):
         result = await _get_vote(self.vote_id, interaction)
         if not result:
             return
-        data, vote, session = result
+        vote, session = result
         user_id = str(interaction.user.id)
 
         # Prevent multiple open vote dialogs
@@ -339,10 +376,9 @@ class VoteSelectView(discord.ui.View):
         self.remaining = remaining
         self.user_id = user_id
 
-        # Load vote options for select menu
-        data = _load_data()
-        vote = data["votes"].get(vote_id, {})
-        options = vote.get("options", [])
+        # Read vote options from in-memory data
+        vote = _data["votes"][vote_id]
+        options = vote["options"]
 
         self.option_select = discord.ui.Select(
             placeholder="Wähle eine Option...",
@@ -426,6 +462,9 @@ class VotingCog(commands.Cog):
 
     async def cog_load(self):
         """Fetch department choices from easyVerein at startup and register persistent views."""
+        # Load voting data from disk into memory (once)
+        _init_data()
+
         # Fetch department options directly via the Abteilungen custom field
         try:
             ev_client = self.bot.ev_client
@@ -450,8 +489,7 @@ class VotingCog(commands.Cog):
             )
 
         # Re-register persistent views for all active votes
-        data = _load_data()
-        for vote_id, vote in data.get("votes", {}).items():
+        for vote_id, vote in _data["votes"].items():
             if vote.get("active"):
                 view = VoteView(vote_id)
                 # Set unique custom_id per vote
@@ -497,18 +535,17 @@ class VotingCog(commands.Cog):
                 return
 
         async with _data_lock:
-            data = _load_data()
-            session_id = str(data["next_session_id"])
-            data["next_session_id"] += 1
+            session_id = str(_data["next_session_id"])
+            _data["next_session_id"] += 1
 
-            data["sessions"][session_id] = {
+            _data["sessions"][session_id] = {
                 "department": department,
                 "created_by": interaction.user.id,
                 "delegated_votes": {},
                 "active": True,
                 "created_at": _now_iso(),
             }
-            _save_data(data)
+            _flush_data()
 
         scope = f"für **{department}**" if department else "für **alle Mitglieder**"
         await interaction.response.send_message(
@@ -558,14 +595,14 @@ class VotingCog(commands.Cog):
             result = await _get_active_session(session_id, interaction)
             if not result:
                 return
-            data, session, sid = result
+            session, sid = result
 
             user_id = str(user.id)
             if count == 0:
                 session["delegated_votes"].pop(user_id, None)
             else:
                 session["delegated_votes"][user_id] = count
-            _save_data(data)
+            _flush_data()
 
         total = 1 + count
         await interaction.response.send_message(
@@ -621,14 +658,14 @@ class VotingCog(commands.Cog):
             result = await _get_active_session(session_id, interaction)
             if not result:
                 return
-            data, session, sid = result
+            session, sid = result
 
-            vote_id = str(data["next_vote_id"])
-            data["next_vote_id"] += 1
+            vote_id = str(_data["next_vote_id"])
+            _data["next_vote_id"] += 1
 
             tallies = {opt: 0 for opt in option_list}
 
-            data["votes"][vote_id] = {
+            _data["votes"][vote_id] = {
                 "session_id": sid,
                 "title": title,
                 "options": option_list,
@@ -639,7 +676,7 @@ class VotingCog(commands.Cog):
                 "active": True,
                 "created_at": _now_iso(),
             }
-            _save_data(data)
+            _flush_data()
 
         # Build embed
         embed = discord.Embed(
@@ -650,6 +687,7 @@ class VotingCog(commands.Cog):
                 f"**Status:** 🟢 Offen\n\n"
                 f"**Optionen:**\n"
                 + "\n".join(f"• {opt}" for opt in option_list)
+                + f"\n\n🗳️ **Abgegebene Stimmen:** 0"
             ),
             color=discord.Color.blue(),
             timestamp=datetime.now(ZoneInfo("Europe/Berlin")),
@@ -666,10 +704,9 @@ class VotingCog(commands.Cog):
         # Store message ID for later updates
         msg = await interaction.original_response()
         async with _data_lock:
-            data = _load_data()
-            if vote_id in data["votes"]:
-                data["votes"][vote_id]["message_id"] = msg.id
-                _save_data(data)
+            if vote_id in _data["votes"]:
+                _data["votes"][vote_id]["message_id"] = msg.id
+                _flush_data()
 
         logger.info(
             "Vote #%s created in session #%s by %s: %s",
@@ -692,27 +729,27 @@ class VotingCog(commands.Cog):
             result = await _get_vote(vote_id, interaction)
             if not result:
                 return
-            data, vote, session = result
+            vote, session = result
 
-            # Close the vote
+            # Close the vote and flush final tallies to disk
             vote["active"] = False
-            _save_data(data)
+            _flush_data()
 
         # Build results embed
         tallies = vote["tallies"]
         total_votes = sum(tallies.values())
-        total_voters = len(vote.get("votes_used", {}))
+        total_voters = len(vote["votes_used"])
 
         results_lines = []
         for opt in vote["options"]:
-            count = tallies.get(opt, 0)
+            count = tallies[opt]
             bar = _build_result_bar(count, total_votes)
             results_lines.append(f"**{opt}**\n{bar}")
 
         embed = discord.Embed(
             title=f"📊 Ergebnis – Abstimmung #{vote_id}: {vote['title']}",
             description=(
-                f"**Abteilung:** {session.get('department', 'Unbekannt')}\n\n"
+                f"**Abteilung:** {session['department']}\n\n"
                 + "\n".join(results_lines)
                 + f"\n\n**Gesamt:** {total_votes} Stimmen von {total_voters} Wählern"
             ),
@@ -756,11 +793,11 @@ class VotingCog(commands.Cog):
             result = await _get_active_session(session_id, interaction)
             if not result:
                 return
-            data, session, sid = result
+            session, sid = result
 
             # Check for open votes – refuse if any remain
             open_votes = [
-                vid for vid, v in data["votes"].items()
+                vid for vid, v in _data["votes"].items()
                 if str(v.get("session_id")) == sid and v.get("active")
             ]
             if open_votes:
@@ -774,7 +811,7 @@ class VotingCog(commands.Cog):
 
             # Close the session
             session["active"] = False
-            _save_data(data)
+            _flush_data()
 
         await interaction.response.send_message(
             f"✅ Wahlsitzung #{session_id} beendet."
