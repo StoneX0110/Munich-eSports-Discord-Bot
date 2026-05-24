@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from config import DEPARTMENT_HEAD_ROLE_ID, GUILD_ID, POLLS_FILE
+from config import DEPARTMENT_HEAD_ROLE_ID, GUILD_ID, POLLS_FILE, STAFF_ROLE_ID
 
 logger = logging.getLogger("munich_esports_bot.scheduled_polls")
 
@@ -23,6 +23,7 @@ DEFAULT_POLLS_DATA = {
 
 WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
 POLLS_FLUSH_INTERVAL_SECONDS = 60
+SCHEDULED_POLL_MANAGER_ROLE_IDS = {DEPARTMENT_HEAD_ROLE_ID, STAFF_ROLE_ID}
 _polls_data_lock = asyncio.Lock()
 _polls_data_cache: dict | None = None
 _polls_data_dirty = False
@@ -107,9 +108,9 @@ def _reset_polls_data_cache() -> None:
 # Authorization & validation helpers
 # ---------------------------------------------------------------------------
 
-def _is_department_head(member: discord.Member) -> bool:
-    """Check whether a Discord member has the department head role."""
-    return any(r.id == DEPARTMENT_HEAD_ROLE_ID for r in member.roles)
+def _can_manage_scheduled_polls(member: discord.Member) -> bool:
+    """Check whether a Discord member can manage scheduled polls."""
+    return any(r.id in SCHEDULED_POLL_MANAGER_ROLE_IDS for r in member.roles)
 
 
 def _normalize_weekday(day: str) -> str | None:
@@ -314,9 +315,9 @@ class ScheduledPollCog(commands.Cog):
         description="Zeigt alle eingerichteten wiederkehrenden Umfragen an",
     )
     async def poll_list(self, interaction: discord.Interaction):
-        if not _is_department_head(interaction.user):
+        if not _can_manage_scheduled_polls(interaction.user):
             await interaction.response.send_message(
-                "❌ Nur Abteilungsleiter können wiederkehrende Umfragen verwalten.",
+                "❌ Nur Abteilungsleiter oder Staff können wiederkehrende Umfragen verwalten.",
                 ephemeral=True,
             )
             return
@@ -361,9 +362,9 @@ class ScheduledPollCog(commands.Cog):
     )
     @app_commands.describe(poll_id="ID der wiederkehrenden Umfrage")
     async def poll_delete(self, interaction: discord.Interaction, poll_id: int):
-        if not _is_department_head(interaction.user):
+        if not _can_manage_scheduled_polls(interaction.user):
             await interaction.response.send_message(
-                "❌ Nur Abteilungsleiter können wiederkehrende Umfragen verwalten.",
+                "❌ Nur Abteilungsleiter oder Staff können wiederkehrende Umfragen verwalten.",
                 ephemeral=True,
             )
             return
@@ -411,9 +412,9 @@ class ScheduledPollCog(commands.Cog):
         reminder_weekday: str | None = None,
         reminder_hour: int | None = None,
     ):
-        if not _is_department_head(interaction.user):
+        if not _can_manage_scheduled_polls(interaction.user):
             await interaction.response.send_message(
-                "❌ Nur Abteilungsleiter können wiederkehrende Umfragen verwalten.",
+                "❌ Nur Abteilungsleiter oder Staff können wiederkehrende Umfragen verwalten.",
                 ephemeral=True,
             )
             return
@@ -709,9 +710,9 @@ class ScheduledPollCog(commands.Cog):
     )
     @app_commands.describe(poll_id="ID der wiederkehrenden Umfrage")
     async def trigger_post(self, interaction: discord.Interaction, poll_id: int):
-        if not _is_department_head(interaction.user):
+        if not _can_manage_scheduled_polls(interaction.user):
             await interaction.response.send_message(
-                "❌ Nur Abteilungsleiter können wiederkehrende Umfragen verwalten.",
+                "❌ Nur Abteilungsleiter oder Staff können wiederkehrende Umfragen verwalten.",
                 ephemeral=True,
             )
             return
@@ -745,9 +746,9 @@ class ScheduledPollCog(commands.Cog):
     )
     @app_commands.describe(poll_id="ID der wiederkehrenden Umfrage")
     async def trigger_reminder(self, interaction: discord.Interaction, poll_id: int):
-        if not _is_department_head(interaction.user):
+        if not _can_manage_scheduled_polls(interaction.user):
             await interaction.response.send_message(
-                "❌ Nur Abteilungsleiter können wiederkehrende Umfragen verwalten.",
+                "❌ Nur Abteilungsleiter oder Staff können wiederkehrende Umfragen verwalten.",
                 ephemeral=True,
             )
             return

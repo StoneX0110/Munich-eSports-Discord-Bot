@@ -1,6 +1,6 @@
 # 📅 Wiederkehrende Termin-Umfragen
 
-Automatische Verfügbarkeitsumfragen für Trainings, Scrims oder andere regelmäßige Termine direkt in Discord. **Abteilungsleiter** richten die Umfragen ein, die ausgewählte Rolle trägt ihre Verfügbarkeit ein.
+Automatische Verfügbarkeitsumfragen für Trainings, Scrims oder andere regelmäßige Termine direkt in Discord. **Abteilungsleiter oder Staff** richten die Umfragen ein, die ausgewählte Rolle trägt ihre Verfügbarkeit ein.
 
 ## Ablauf
 
@@ -8,7 +8,7 @@ Automatische Verfügbarkeitsumfragen für Trainings, Scrims oder andere regelmä
 
 ---
 
-## Befehle (für Abteilungsleiter)
+## Befehle (für Abteilungsleiter oder Staff)
 
 | Befehl | Beschreibung | Beispiel |
 |--------|-------------|---------|
@@ -93,11 +93,10 @@ Falls der Bot in derselben Woche mehrfach in der Posting-Stunde läuft oder neu 
 
 ## Berechtigungen
 
-| | Abteilungsleiter | Mitglied der Umfrage-Rolle | Andere Mitglieder |
-|-|:---:|:---:|:---:|
-| Wiederkehrende Umfragen erstellen | ✅ | ❌ | ❌ |
-| Wiederkehrende Umfragen auflisten | ✅ | ❌ | ❌ |
-| Wiederkehrende Umfragen löschen | ✅ | ❌ | ❌ |
-| Manuelles Posten / Reminder auslösen | ✅ | ❌ | ❌ |
-| In einer aktiven Umfrage abstimmen | ✅, wenn in der Rolle | ✅ | ❌ |
-
+| | Abteilungsleiter | Staff | Mitglied der Umfrage-Rolle | Andere Mitglieder |
+|-|:---:|:---:|:---:|:---:|
+| Wiederkehrende Umfragen erstellen | ✅ | ✅ | ❌ | ❌ |
+| Wiederkehrende Umfragen auflisten | ✅ | ✅ | ❌ | ❌ |
+| Wiederkehrende Umfragen löschen | ✅ | ✅ | ❌ | ❌ |
+| Manuelles Posten / Reminder auslösen | ✅ | ✅ | ❌ | ❌ |
+| In einer aktiven Umfrage abstimmen | ✅, wenn in der Rolle | ✅, wenn in der Rolle | ✅ | ❌ |

@@ -9,13 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 import pytest
 
+import config
 from cogs import scheduled_polls
 from cogs.scheduled_polls import (
     ScheduledPollCog,
     ScheduledPollView,
     _load_polls_data,
     _save_polls_data,
-    _is_department_head,
     _normalize_weekday,
     _get_target_dates,
     _build_poll_embed,
@@ -112,25 +112,10 @@ def test_flush_polls_data_writes_only_when_dirty():
         save_mock.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# Tests for _is_department_head
-# ---------------------------------------------------------------------------
-
-def test_is_department_head_true():
-    """Verify department head detection with matching role."""
-    member = MagicMock()
-    role = MagicMock()
-    role.id = 748509968172449802  # DEPARTMENT_HEAD_ROLE_ID
-    member.roles = [role]
-    assert _is_department_head(member) is True
-
-def test_is_department_head_false():
-    """Verify non-department-head is rejected."""
-    member = MagicMock()
-    role = MagicMock()
-    role.id = 999999999
-    member.roles = [role]
-    assert _is_department_head(member) is False
+def test_scheduled_poll_staff_role_comes_from_config():
+    """Verify scheduled poll Staff authorization uses the shared config constant."""
+    assert hasattr(config, "STAFF_ROLE_ID")
+    assert scheduled_polls.STAFF_ROLE_ID == config.STAFF_ROLE_ID
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +176,17 @@ def _department_head_interaction():
     return interaction
 
 
+def _staff_interaction():
+    role = MagicMock()
+    role.id = 622890975718670336  # Staff
+    interaction = MagicMock()
+    interaction.user.id = 123
+    interaction.user.roles = [role]
+    interaction.channel_id = 456
+    interaction.response.send_message = AsyncMock()
+    return interaction
+
+
 def _poll_role():
     role = MagicMock()
     role.id = 200
@@ -221,6 +217,32 @@ def test_poll_create_without_reminder_stores_no_reminder_config():
         assert saved_poll["reminder_hour"] is None
         response = interaction.response.send_message.call_args[0][0]
         assert "**Reminder:** keine" in response
+
+    asyncio.run(run())
+
+
+def test_poll_create_allows_staff_role():
+    async def run():
+        bot = MagicMock()
+        cog = ScheduledPollCog(bot)
+        interaction = _staff_interaction()
+        data = {"next_scheduled_poll_id": 1, "scheduled_polls": {}}
+
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
+            save_mock = MagicMock()
+            with patch("cogs.scheduled_polls._save_polls_data", save_mock):
+                await ScheduledPollCog.poll_create.callback(
+                    cog,
+                    interaction,
+                    _poll_role(),
+                    "mittwoch",
+                )
+
+        save_mock.assert_called_once()
+        saved_poll = save_mock.call_args[0][0]["scheduled_polls"]["1"]
+        assert saved_poll["created_by"] == interaction.user.id
+        response = interaction.response.send_message.call_args[0][0]
+        assert response.startswith("✅ Wiederkehrende Umfrage #1 erstellt!")
 
     asyncio.run(run())
 

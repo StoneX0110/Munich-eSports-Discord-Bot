@@ -32,6 +32,7 @@ MEMBER_CHANNEL_ID = 615563862426648580        # #member-general – anniversarie
 HONEYPOT_CHANNEL_ID = 1504391371719446540     # spam trap – any post here triggers ban
 MOD_CHANNEL_ID = 615559692101353513  # moderation channel
 DEPARTMENT_HEAD_ROLE_ID = 748509968172449802  # "Abteilungsleiter"
+STAFF_ROLE_ID = 622890975718670336  # "Staff"
 DEPARTMENT_ROLES = {
     615553053042540564: "Counter Strike",
     748502331661746247: "League Of Legends",
