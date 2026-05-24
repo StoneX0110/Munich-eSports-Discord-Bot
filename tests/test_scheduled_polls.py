@@ -142,11 +142,28 @@ def test_normalize_weekday_invalid():
 def test_get_target_dates():
     # Post day is Wednesday 2026-05-27. Target week starts Monday 2026-06-01
     post_day = date(2026, 5, 27)
-    target_monday, days = _get_target_dates(post_day)
-    assert target_monday == date(2026, 6, 1)
+    target_start, days = _get_target_dates(post_day)
+    assert target_start == date(2026, 6, 1)
     assert len(days) == 7
     assert days[0] == "01.06."
     assert days[6] == "07.06."
+
+
+def test_get_target_dates_with_friday_start():
+    post_day = date(2026, 5, 27)  # Wednesday
+    target_start, days = _get_target_dates(post_day, "Freitag")
+    assert target_start == date(2026, 5, 29)
+    assert days[0] == "01.06."
+    assert days[4] == "29.05."
+    assert days[6] == "31.05."
+
+
+def test_get_target_dates_with_matching_start_uses_next_week():
+    post_day = date(2026, 5, 29)  # Friday
+    target_start, days = _get_target_dates(post_day, "Freitag")
+    assert target_start == date(2026, 6, 5)
+    assert days[4] == "05.06."
+
 
 def test_build_poll_embed():
     responses = {
@@ -159,6 +176,26 @@ def test_build_poll_embed():
     assert "Montag (01.06.) [1]" in embed.description
     assert "Dienstag (02.06.) [0]" in embed.description
     assert "Keine Zeit [1]" in embed.description
+
+
+def test_build_poll_embed_sorts_dates_from_target_start():
+    embed = _build_poll_embed("123456", "2026-05-29", {})
+    description = embed.description
+
+    friday_idx = description.index("Freitag (29.05.)")
+    saturday_idx = description.index("Samstag (30.05.)")
+    sunday_idx = description.index("Sonntag (31.05.)")
+    monday_idx = description.index("Montag (01.06.)")
+    thursday_idx = description.index("Donnerstag (04.06.)")
+
+    assert friday_idx < saturday_idx < sunday_idx < monday_idx < thursday_idx
+
+
+def test_scheduled_poll_view_orders_buttons_from_week_start_day():
+    view = ScheduledPollView("1", "Freitag")
+    labels = [item.label for item in view.children]
+
+    assert labels == ["Fr", "Sa", "So", "Mo", "Di", "Mi", "Do", "Keine Zeit"]
 
 
 # ---------------------------------------------------------------------------
@@ -213,9 +250,11 @@ def test_poll_create_without_reminder_stores_no_reminder_config():
 
         saved_poll = save_mock.call_args[0][0]["scheduled_polls"]["1"]
         assert saved_poll["weekday"] == "Mittwoch"
+        assert saved_poll["week_start_day"] == "Montag"
         assert saved_poll["reminder_weekday"] is None
         assert saved_poll["reminder_hour"] is None
         response = interaction.response.send_message.call_args[0][0]
+        assert "**Erster Tag der Spielwoche:** Montag" in response
         assert "**Reminder:** keine" in response
 
     asyncio.run(run())
@@ -271,6 +310,58 @@ def test_poll_create_with_valid_reminder_stores_reminder_config():
         assert saved_poll["reminder_hour"] == 18
         response = interaction.response.send_message.call_args[0][0]
         assert "**Reminder:** Sonntag um 18:00" in response
+
+    asyncio.run(run())
+
+
+def test_poll_create_with_week_start_day_stores_week_start_day():
+    async def run():
+        bot = MagicMock()
+        cog = ScheduledPollCog(bot)
+        interaction = _department_head_interaction()
+        data = {"next_scheduled_poll_id": 1, "scheduled_polls": {}}
+
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
+            save_mock = MagicMock()
+            with patch("cogs.scheduled_polls._save_polls_data", save_mock):
+                await ScheduledPollCog.poll_create.callback(
+                    cog,
+                    interaction,
+                    _poll_role(),
+                    "Mittwoch",
+                    None,
+                    None,
+                    "freitag",
+                )
+
+        saved_poll = save_mock.call_args[0][0]["scheduled_polls"]["1"]
+        assert saved_poll["week_start_day"] == "Freitag"
+        response = interaction.response.send_message.call_args[0][0]
+        assert "**Erster Tag der Spielwoche:** Freitag" in response
+
+    asyncio.run(run())
+
+
+def test_poll_create_rejects_invalid_week_start_day():
+    async def run():
+        bot = MagicMock()
+        cog = ScheduledPollCog(bot)
+        interaction = _department_head_interaction()
+
+        await ScheduledPollCog.poll_create.callback(
+            cog,
+            interaction,
+            _poll_role(),
+            "Mittwoch",
+            None,
+            None,
+            "Friday",
+        )
+
+        interaction.response.send_message.assert_called_once()
+        message = interaction.response.send_message.call_args[0][0]
+        assert "Ungültiger erster Tag der Spielwoche" in message
+        assert interaction.response.send_message.call_args.kwargs["ephemeral"] is True
 
     asyncio.run(run())
 
@@ -357,6 +448,7 @@ def test_poll_list_shows_reminder_schedule():
                     "channel_id": 100,
                     "role_id": 200,
                     "weekday": "Mittwoch",
+                    "week_start_day": "Freitag",
                     "reminder_weekday": "Sonntag",
                     "reminder_hour": 5,
                 },
@@ -375,6 +467,8 @@ def test_poll_list_shows_reminder_schedule():
 
         embed = interaction.response.send_message.call_args.kwargs["embed"]
         first, second = embed.fields
+        assert "**Erster Tag der Spielwoche:** Freitag" in first.value
+        assert "**Erster Tag der Spielwoche:** Montag" in second.value
         assert "**Reminder:** Sonntag um 05:00" in first.value
         assert "**Reminder:** keine" in second.value
         assert interaction.response.send_message.call_args.kwargs["ephemeral"] is True
@@ -570,6 +664,84 @@ def test_handle_posting_on_matching_weekday(tmp_path):
         assert instance["responses"] == {}
 
     asyncio.run(run())
+
+
+def test_handle_posting_uses_configured_week_start_day():
+    async def run():
+        bot = MagicMock()
+        cog = ScheduledPollCog(bot)
+        channel = AsyncMock()
+        sent_msg = MagicMock()
+        sent_msg.id = 555
+        channel.send = AsyncMock(return_value=sent_msg)
+        bot.get_channel.return_value = channel
+
+        data = {
+            "next_scheduled_poll_id": 2,
+            "scheduled_polls": {
+                "1": {
+                    "channel_id": 100,
+                    "role_id": 200,
+                    "weekday": "Mittwoch",
+                    "week_start_day": "Freitag",
+                    "created_by": 1,
+                    "created_at": "2026-05-23T08:00:00+02:00",
+                    "reminder_weekday": None,
+                    "reminder_hour": None,
+                    "active_instance": None,
+                }
+            },
+        }
+
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
+            save_mock = MagicMock()
+            with patch("cogs.scheduled_polls._save_polls_data", save_mock):
+                await cog._handle_posting(date(2026, 5, 27))  # Wednesday
+
+        saved = save_mock.call_args[0][0]
+        instance = saved["scheduled_polls"]["1"]["active_instance"]
+        assert instance["target_week_start"] == "2026-05-29"
+
+    asyncio.run(run())
+
+
+def test_handle_posting_defaults_old_polls_to_monday_start():
+    async def run():
+        bot = MagicMock()
+        cog = ScheduledPollCog(bot)
+        channel = AsyncMock()
+        sent_msg = MagicMock()
+        sent_msg.id = 555
+        channel.send = AsyncMock(return_value=sent_msg)
+        bot.get_channel.return_value = channel
+
+        data = {
+            "next_scheduled_poll_id": 2,
+            "scheduled_polls": {
+                "1": {
+                    "channel_id": 100,
+                    "role_id": 200,
+                    "weekday": "Mittwoch",
+                    "created_by": 1,
+                    "created_at": "2026-05-23T08:00:00+02:00",
+                    "reminder_weekday": None,
+                    "reminder_hour": None,
+                    "active_instance": None,
+                }
+            },
+        }
+
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
+            save_mock = MagicMock()
+            with patch("cogs.scheduled_polls._save_polls_data", save_mock):
+                await cog._handle_posting(date(2026, 5, 27))  # Wednesday
+
+        saved = save_mock.call_args[0][0]
+        instance = saved["scheduled_polls"]["1"]["active_instance"]
+        assert instance["target_week_start"] == "2026-06-01"
+
+    asyncio.run(run())
+
 
 def test_handle_posting_skips_existing_instance_for_same_target_week():
     async def run():

@@ -140,27 +140,44 @@ def _format_reminder_schedule(poll: dict) -> str:
     return f"{reminder_weekday} um {reminder_hour:02d}:00"
 
 
+def _poll_week_start_day(poll: dict) -> str:
+    return _normalize_weekday(poll.get("week_start_day") or "Montag") or "Montag"
+
+
+def _weekdays_from_start(week_start_day: str) -> list[str]:
+    week_start_day_idx = WEEKDAYS.index(week_start_day)
+    return [
+        WEEKDAYS[(week_start_day_idx + i) % len(WEEKDAYS)]
+        for i in range(len(WEEKDAYS))
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Embed & interactive view helpers
 # ---------------------------------------------------------------------------
 
 
-def _get_target_dates(post_date: date) -> tuple[date, list[str]]:
-    """Return the Monday after the poll week and formatted day strings for that week."""
-    days_to_monday = (0 - post_date.weekday()) % 7
-    if days_to_monday == 0:
-        days_to_monday = 7  # Always starting the week AFTER the poll
-    target_monday = post_date + timedelta(days=days_to_monday)
+def _get_target_dates(
+    post_date: date,
+    week_start_day: str = "Montag",
+) -> tuple[date, list[str]]:
+    """Return the next target start date and formatted dates for all weekdays."""
+    week_start_day_idx = WEEKDAYS.index(week_start_day)
+    days_to_start = (week_start_day_idx - post_date.weekday()) % 7
+    if days_to_start == 0:
+        days_to_start = 7  # Always starting the week AFTER the poll
+    target_start = post_date + timedelta(days=days_to_start)
     days_strs = []
-    for i in range(7):
-        d = target_monday + timedelta(days=i)
+    for day in WEEKDAYS:
+        weekday_idx = WEEKDAYS.index(day)
+        days_from_start = (weekday_idx - week_start_day_idx) % 7
+        d = target_start + timedelta(days=days_from_start)
         days_strs.append(d.strftime("%d.%m."))
-    return target_monday, days_strs
+    return target_start, days_strs
 
 
 def _build_poll_embed(role_id: str | int, target_week_start_str: str, responses: dict) -> discord.Embed:
     start_date = date.fromisoformat(target_week_start_str)
-    _, days_strs = _get_target_dates(start_date - timedelta(days=7))
 
     tallies = {day: [] for day in WEEKDAYS}
     no_time_list = []
@@ -177,8 +194,10 @@ def _build_poll_embed(role_id: str | int, target_week_start_str: str, responses:
         "",
     ]
 
-    for idx, day in enumerate(WEEKDAYS):
-        day_str = days_strs[idx]
+    for i in range(7):
+        current_date = start_date + timedelta(days=i)
+        day = _weekday_name(current_date)
+        day_str = current_date.strftime("%d.%m.")
         users = tallies[day]
         count = len(users)
         lines.append(f"📅 **{day} ({day_str}) [{count}]:**")
@@ -203,11 +222,11 @@ def _build_poll_embed(role_id: str | int, target_week_start_str: str, responses:
 class ScheduledPollView(discord.ui.View):
     """Persistent button view for toggling availability on a scheduled poll."""
 
-    def __init__(self, poll_id: str):
+    def __init__(self, poll_id: str, week_start_day: str = "Montag"):
         super().__init__(timeout=None)
         self.poll_id = poll_id
 
-        for day in WEEKDAYS:
+        for day in _weekdays_from_start(week_start_day):
             btn = discord.ui.Button(
                 label=day[:2],
                 style=discord.ButtonStyle.primary,
@@ -345,7 +364,8 @@ class ScheduledPollCog(commands.Cog):
                     value=(
                         f"**Rolle:** {role_mention}\n"
                         f"**Kanal:** {channel_mention}\n"
-                        f"**Wochentag:** {poll['weekday']}\n"
+                        f"**Postet am:** {poll['weekday']}\n"
+                        f"**Erster Tag der Spielwoche:** {_poll_week_start_day(poll)}\n"
                         f"**Reminder:** {_format_reminder_schedule(poll)}"
                     ),
                     inline=False,
@@ -400,17 +420,19 @@ class ScheduledPollCog(commands.Cog):
     )
     @app_commands.describe(
         role="Die Rolle, die für die Umfrage erwähnt wird",
-        weekday="Wochentag der Umfrage (deutsch, z.B. Montag, Dienstag, ...)",
+        postet_am="Wochentag, an dem die Umfrage automatisch gepostet wird",
         reminder_weekday="Optionaler Wochentag für Reminder-Pings",
         reminder_hour="Optionale Uhrzeit für Reminder-Pings (0-23)",
+        erster_tag_der_spielwoche="Optionaler erster Tag der Spielwoche (Standard: Montag)",
     )
     async def poll_create(
         self,
         interaction: discord.Interaction,
         role: discord.Role,
-        weekday: str,
+        postet_am: str,
         reminder_weekday: str | None = None,
         reminder_hour: int | None = None,
+        erster_tag_der_spielwoche: str | None = None,
     ):
         if not _can_manage_scheduled_polls(interaction.user):
             await interaction.response.send_message(
@@ -419,11 +441,26 @@ class ScheduledPollCog(commands.Cog):
             )
             return
 
-        normalized = _normalize_weekday(weekday)
+        normalized = _normalize_weekday(postet_am)
         if normalized is None:
             valid_list = ", ".join(WEEKDAYS)
             await interaction.response.send_message(
-                f"❌ Ungültiger Wochentag: `{weekday}`. Gültige Werte: {valid_list}",
+                f"❌ Ungültiger Posting-Wochentag: `{postet_am}`. Gültige Werte: {valid_list}",
+                ephemeral=True,
+            )
+            return
+
+        erster_tag_der_spielwoche = (
+            erster_tag_der_spielwoche.strip()
+            if erster_tag_der_spielwoche
+            else "Montag"
+        )
+        normalized_week_start_day = _normalize_weekday(erster_tag_der_spielwoche)
+        if normalized_week_start_day is None:
+            valid_list = ", ".join(WEEKDAYS)
+            await interaction.response.send_message(
+                "❌ Ungültiger erster Tag der Spielwoche: "
+                f"`{erster_tag_der_spielwoche}`. Gültige Werte: {valid_list}",
                 ephemeral=True,
             )
             return
@@ -466,6 +503,7 @@ class ScheduledPollCog(commands.Cog):
                 "channel_id": interaction.channel_id,
                 "role_id": role.id,
                 "weekday": normalized,
+                "week_start_day": normalized_week_start_day,
                 "reminder_weekday": normalized_reminder_weekday,
                 "reminder_hour": reminder_hour,
                 "created_by": interaction.user.id,
@@ -484,13 +522,14 @@ class ScheduledPollCog(commands.Cog):
             f"✅ Wiederkehrende Umfrage #{poll_id} erstellt!\n"
             f"**Rolle:** {role.mention}\n"
             f"**Kanal:** <#{interaction.channel_id}>\n"
-            f"**Wochentag:** {normalized}\n"
+            f"**Postet am:** {normalized}\n"
+            f"**Erster Tag der Spielwoche:** {normalized_week_start_day}\n"
             f"**Reminder:** {reminder_schedule}",
             ephemeral=True,
         )
 
-    @poll_create.autocomplete("weekday")
-    async def weekday_autocomplete(
+    @poll_create.autocomplete("postet_am")
+    async def postet_am_autocomplete(
         self, interaction: discord.Interaction, current: str,
     ) -> list[app_commands.Choice[str]]:
         return [
@@ -501,6 +540,16 @@ class ScheduledPollCog(commands.Cog):
 
     @poll_create.autocomplete("reminder_weekday")
     async def reminder_weekday_autocomplete(
+        self, interaction: discord.Interaction, current: str,
+    ) -> list[app_commands.Choice[str]]:
+        return [
+            app_commands.Choice(name=day, value=day)
+            for day in WEEKDAYS
+            if current.lower() in day.lower()
+        ][:25]
+
+    @poll_create.autocomplete("erster_tag_der_spielwoche")
+    async def erster_tag_der_spielwoche_autocomplete(
         self, interaction: discord.Interaction, current: str,
     ) -> list[app_commands.Choice[str]]:
         return [
@@ -522,7 +571,10 @@ class ScheduledPollCog(commands.Cog):
             ]
 
         for poll_id in active_poll_ids:
-            self.bot.add_view(ScheduledPollView(poll_id))
+            poll = data["scheduled_polls"][poll_id]
+            instance = poll["active_instance"]
+            week_start_day = _weekday_name(date.fromisoformat(instance["target_week_start"]))
+            self.bot.add_view(ScheduledPollView(poll_id, week_start_day))
 
         if not self.scheduled_poll_loop.is_running():
             self.scheduled_poll_loop.start()
@@ -574,12 +626,12 @@ class ScheduledPollCog(commands.Cog):
                 if not force and poll["weekday"] != today_weekday:
                     continue
 
-                target_monday, _ = _get_target_dates(today)
-                target_monday_str = target_monday.isoformat()
+                target_start, _ = _get_target_dates(today, _poll_week_start_day(poll))
+                target_start_str = target_start.isoformat()
                 if (
                     not force
                     and poll.get("active_instance")
-                    and poll["active_instance"].get("target_week_start") == target_monday_str
+                    and poll["active_instance"].get("target_week_start") == target_start_str
                 ):
                     continue
 
@@ -609,8 +661,8 @@ class ScheduledPollCog(commands.Cog):
 
                 role_id = poll["role_id"]
 
-                embed = _build_poll_embed(role_id, target_monday_str, {})
-                view = ScheduledPollView(current_poll_id)
+                embed = _build_poll_embed(role_id, target_start_str, {})
+                view = ScheduledPollView(current_poll_id, _weekday_name(target_start))
 
                 try:
                     msg = await channel.send(
@@ -621,7 +673,7 @@ class ScheduledPollCog(commands.Cog):
                     poll["active_instance"] = {
                         "message_id": msg.id,
                         "posted_at": _now_iso(),
-                        "target_week_start": target_monday_str,
+                        "target_week_start": target_start_str,
                         "reminded": False,
                         "responses": {},
                     }
