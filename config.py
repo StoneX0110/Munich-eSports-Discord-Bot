@@ -49,6 +49,7 @@ ABTEILUNGEN_FIELD_ID = 34866629       # "Abteilungen" – multi-select departmen
 # ---------------------------------------------------------------------------
 KNOWN_MEMBERS_FILE = Path(__file__).resolve().parent / "known_members.json"
 VOTES_FILE = Path(__file__).resolve().parent / "votes.json"
+POLLS_FILE = Path(__file__).resolve().parent / "scheduled_polls.json"
 
 # ---------------------------------------------------------------------------
 # Schedule

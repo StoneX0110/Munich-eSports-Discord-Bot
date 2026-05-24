@@ -20,3 +20,7 @@ logs/
 # Bot state
 known_members.json
 votes.json
+scheduled_polls.json
+
+# Docs
+docs/
