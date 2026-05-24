@@ -12,7 +12,6 @@ import random
 import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
-from pathlib import Path
 
 import discord
 from discord.ext import commands, tasks
@@ -30,9 +29,9 @@ from config import (
     GENERAL_CHANNEL_ID,
     GUILD_ID,
     KNOWN_MEMBERS_FILE,
+    LOG_DIR,
     MEMBER_CHANNEL_ID,
     MEMBERSHIP_ROLE_ID,
-    VOTES_FILE,
 )
 from messages import (
     ANNIVERSARY_MESSAGES_1Y,
@@ -48,7 +47,7 @@ from messages import (
 # Logging
 # ---------------------------------------------------------------------------
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-_LOG_DIR = Path(__file__).resolve().parent / "logs"
+_LOG_DIR = LOG_DIR
 _LOG_DIR.mkdir(exist_ok=True)
 
 # Console handler
@@ -514,13 +513,13 @@ async def daily_task():
 # ---------------------------------------------------------------------------
 async def _setup_hook():
     """Load extensions and sync commands - runs once before on_ready."""
-    await bot.load_extension("voting")
+    await bot.load_extension("cogs.voting")
     logger.info("Voting cog loaded.")
-    await bot.load_extension("department")
+    await bot.load_extension("cogs.department")
     logger.info("Department cog loaded.")
-    await bot.load_extension("honeypot")
+    await bot.load_extension("cogs.honeypot")
     logger.info("Honeypot cog loaded.")
-    await bot.load_extension("scheduled_polls")
+    await bot.load_extension("cogs.scheduled_polls")
     logger.info("Scheduled polls cog loaded.")
     await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
     logger.info("Slash commands synced.")
@@ -550,8 +549,9 @@ async def on_ready():
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    if "--dry-run" in sys.argv:
+def main(argv: list[str] | None = None) -> None:
+    args = sys.argv[1:] if argv is None else argv
+    if "--dry-run" in args:
         bot.dry_run = True
 
     if not DISCORD_TOKEN:
@@ -562,3 +562,7 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     bot.run(DISCORD_TOKEN, log_handler=None)
+
+
+if __name__ == "__main__":
+    main()
