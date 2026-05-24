@@ -22,7 +22,10 @@ DEFAULT_POLLS_DATA = {
 }
 
 WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+POLLS_FLUSH_INTERVAL_SECONDS = 60
 _polls_data_lock = asyncio.Lock()
+_polls_data_cache: dict | None = None
+_polls_data_dirty = False
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +67,40 @@ def _save_polls_data(data: dict) -> None:
     except OSError:
         logger.exception("Failed to save scheduled polls data.")
         raise
+
+
+def _get_polls_data() -> dict:
+    """Return cached scheduled poll data, loading it from disk once."""
+    global _polls_data_cache
+    if _polls_data_cache is None:
+        _polls_data_cache = _load_polls_data()
+    return _polls_data_cache
+
+
+def _mark_polls_data_dirty() -> None:
+    """Mark cached scheduled poll data as needing a periodic save."""
+    global _polls_data_dirty
+    _polls_data_dirty = True
+
+
+def _flush_polls_data(force: bool = False) -> bool:
+    """Persist cached scheduled poll data if dirty or force is requested."""
+    global _polls_data_dirty
+    if _polls_data_cache is None:
+        return False
+    if not force and not _polls_data_dirty:
+        return False
+
+    _save_polls_data(_polls_data_cache)
+    _polls_data_dirty = False
+    return True
+
+
+def _reset_polls_data_cache() -> None:
+    """Reset cached scheduled poll data. Intended for tests."""
+    global _polls_data_cache, _polls_data_dirty
+    _polls_data_cache = None
+    _polls_data_dirty = False
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +228,7 @@ class ScheduledPollView(discord.ui.View):
             user_id = str(interaction.user.id)
 
             async with _polls_data_lock:
-                data = _load_polls_data()
+                data = _get_polls_data()
                 poll = data["scheduled_polls"].get(self.poll_id)
                 if not poll or not poll.get("active_instance"):
                     poll_inactive = True
@@ -227,7 +264,7 @@ class ScheduledPollView(discord.ui.View):
                     else:
                         responses.pop(user_id, None)
 
-                    _save_polls_data(data)
+                    _mark_polls_data_dirty()
                     embed = _build_poll_embed(
                         poll["role_id"],
                         instance["target_week_start"],
@@ -284,33 +321,34 @@ class ScheduledPollCog(commands.Cog):
             )
             return
 
-        data = _load_polls_data()
-        polls = data.get("scheduled_polls", {})
+        async with _polls_data_lock:
+            data = _get_polls_data()
+            polls = data.get("scheduled_polls", {})
 
-        if not polls:
-            await interaction.response.send_message(
-                "Es sind keine wiederkehrenden Umfragen eingerichtet.",
-                ephemeral=True,
-            )
-            return
+            if not polls:
+                await interaction.response.send_message(
+                    "Es sind keine wiederkehrenden Umfragen eingerichtet.",
+                    ephemeral=True,
+                )
+                return
 
-        embed = discord.Embed(
-            title="📋 Wiederkehrende Umfragen",
-            color=discord.Color.blue(),
-        )
-        for poll_id, poll in polls.items():
-            role_mention = f"<@&{poll['role_id']}>"
-            channel_mention = f"<#{poll['channel_id']}>"
-            embed.add_field(
-                name=f"#{poll_id}",
-                value=(
-                    f"**Rolle:** {role_mention}\n"
-                    f"**Kanal:** {channel_mention}\n"
-                    f"**Wochentag:** {poll['weekday']}\n"
-                    f"**Reminder:** {_format_reminder_schedule(poll)}"
-                ),
-                inline=False,
+            embed = discord.Embed(
+                title="📋 Wiederkehrende Umfragen",
+                color=discord.Color.blue(),
             )
+            for poll_id, poll in polls.items():
+                role_mention = f"<@&{poll['role_id']}>"
+                channel_mention = f"<#{poll['channel_id']}>"
+                embed.add_field(
+                    name=f"#{poll_id}",
+                    value=(
+                        f"**Rolle:** {role_mention}\n"
+                        f"**Kanal:** {channel_mention}\n"
+                        f"**Wochentag:** {poll['weekday']}\n"
+                        f"**Reminder:** {_format_reminder_schedule(poll)}"
+                    ),
+                    inline=False,
+                )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -332,13 +370,13 @@ class ScheduledPollCog(commands.Cog):
 
         poll_key = str(poll_id)
         async with _polls_data_lock:
-            data = _load_polls_data()
+            data = _get_polls_data()
             if poll_key not in data.get("scheduled_polls", {}):
                 poll_missing = True
             else:
                 poll_missing = False
                 del data["scheduled_polls"][poll_key]
-                _save_polls_data(data)
+                _flush_polls_data(force=True)
 
         if poll_missing:
             await interaction.response.send_message(
@@ -419,7 +457,7 @@ class ScheduledPollCog(commands.Cog):
                 return
 
         async with _polls_data_lock:
-            data = _load_polls_data()
+            data = _get_polls_data()
             poll_id = str(data["next_scheduled_poll_id"])
             data["next_scheduled_poll_id"] += 1
 
@@ -433,7 +471,7 @@ class ScheduledPollCog(commands.Cog):
                 "created_at": _now_iso(),
                 "active_instance": None,
             }
-            _save_polls_data(data)
+            _flush_polls_data(force=True)
 
         reminder_schedule = _format_reminder_schedule(
             {
@@ -474,16 +512,36 @@ class ScheduledPollCog(commands.Cog):
     # Lifecycle & background scheduling
     # -----------------------------------------------------------------------
     async def cog_load(self):
-        data = _load_polls_data()
-        for poll_id, poll in data.get("scheduled_polls", {}).items():
-            if poll.get("active_instance"):
-                self.bot.add_view(ScheduledPollView(poll_id))
-        self.scheduled_poll_loop.start()
-        logger.info("Scheduled polls cog loaded; background loop started.")
+        async with _polls_data_lock:
+            data = _get_polls_data()
+            active_poll_ids = [
+                poll_id
+                for poll_id, poll in data.get("scheduled_polls", {}).items()
+                if poll.get("active_instance")
+            ]
+
+        for poll_id in active_poll_ids:
+            self.bot.add_view(ScheduledPollView(poll_id))
+
+        if not self.scheduled_poll_loop.is_running():
+            self.scheduled_poll_loop.start()
+        if not self.scheduled_poll_flush_loop.is_running():
+            self.scheduled_poll_flush_loop.start()
+        logger.info("Scheduled polls cog loaded; background loops started.")
 
     async def cog_unload(self):
         self.scheduled_poll_loop.cancel()
-        logger.info("Scheduled polls cog unloaded; background loop stopped.")
+        self.scheduled_poll_flush_loop.cancel()
+        async with _polls_data_lock:
+            _flush_polls_data()
+        logger.info("Scheduled polls cog unloaded; background loops stopped.")
+
+    @tasks.loop(seconds=POLLS_FLUSH_INTERVAL_SECONDS)
+    async def scheduled_poll_flush_loop(self):
+        async with _polls_data_lock:
+            flushed = _flush_polls_data()
+        if flushed:
+            logger.info("Flushed dirty scheduled poll vote data.")
 
     @tasks.loop(hours=1)
     async def scheduled_poll_loop(self):
@@ -504,7 +562,7 @@ class ScheduledPollCog(commands.Cog):
         force: bool = False,
     ):
         async with _polls_data_lock:
-            data = _load_polls_data()
+            data = _get_polls_data()
             changed = False
             today_weekday = _weekday_name(today)
 
@@ -576,7 +634,7 @@ class ScheduledPollCog(commands.Cog):
                     logger.exception("Failed to post scheduled poll #%s.", current_poll_id)
 
             if changed:
-                _save_polls_data(data)
+                _flush_polls_data(force=True)
 
     async def _handle_reminders(
         self,
@@ -586,7 +644,7 @@ class ScheduledPollCog(commands.Cog):
         force: bool = False,
     ):
         async with _polls_data_lock:
-            data = _load_polls_data()
+            data = _get_polls_data()
             changed = False
             today_weekday = _weekday_name(today)
 
@@ -640,7 +698,7 @@ class ScheduledPollCog(commands.Cog):
                     )
 
             if changed:
-                _save_polls_data(data)
+                _flush_polls_data(force=True)
 
     # -----------------------------------------------------------------------
     # Developer verification commands
@@ -661,7 +719,7 @@ class ScheduledPollCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         poll_key = str(poll_id)
         async with _polls_data_lock:
-            data = _load_polls_data()
+            data = _get_polls_data()
             if poll_key not in data["scheduled_polls"]:
                 poll_missing = True
             else:
@@ -697,7 +755,7 @@ class ScheduledPollCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         poll_key = str(poll_id)
         async with _polls_data_lock:
-            data = _load_polls_data()
+            data = _get_polls_data()
             if poll_key not in data["scheduled_polls"]:
                 poll_missing = True
                 instance_missing = False
@@ -709,7 +767,7 @@ class ScheduledPollCog(commands.Cog):
                 else:
                     instance_missing = False
                     instance["reminded"] = False
-                    _save_polls_data(data)
+                    _flush_polls_data(force=True)
 
         if poll_missing:
             await interaction.followup.send(f"❌ Umfrage #{poll_id} nicht gefunden.")

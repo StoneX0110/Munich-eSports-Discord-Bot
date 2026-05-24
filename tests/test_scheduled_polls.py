@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 import pytest
 
+import scheduled_polls
 from scheduled_polls import (
     ScheduledPollCog,
     ScheduledPollView,
@@ -20,6 +21,14 @@ from scheduled_polls import (
     _build_poll_embed,
     setup,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_scheduled_polls_cache():
+    scheduled_polls._reset_polls_data_cache()
+    yield
+    scheduled_polls._reset_polls_data_cache()
+
 
 def test_load_polls_data_missing(tmp_path):
     """Verify that missing poll configuration file defaults gracefully."""
@@ -86,6 +95,21 @@ def test_save_polls_data_io_error():
     with patch("scheduled_polls.POLLS_FILE", mock_file):
         with pytest.raises(OSError):
             _save_polls_data({})
+
+
+def test_flush_polls_data_writes_only_when_dirty():
+    """Verify dirty cached poll data is written once, then skipped while clean."""
+    data = {"next_scheduled_poll_id": 1, "scheduled_polls": {}}
+    scheduled_polls._polls_data_cache = data
+    scheduled_polls._mark_polls_data_dirty()
+
+    with patch("scheduled_polls._save_polls_data") as save_mock:
+        assert scheduled_polls._flush_polls_data() is True
+        save_mock.assert_called_once_with(data)
+        assert scheduled_polls._polls_data_dirty is False
+
+        assert scheduled_polls._flush_polls_data() is False
+        save_mock.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +460,31 @@ def test_scheduled_poll_loop_uses_hourly_interval():
     assert loop.time is None
 
 
+def test_scheduled_poll_flush_loop_uses_sixty_second_interval():
+    loop = ScheduledPollCog.scheduled_poll_flush_loop
+    assert loop.hours == 0.0
+    assert loop.minutes == 0.0
+    assert loop.seconds == 60.0
+    assert loop.time is None
+
+
+def test_cog_unload_flushes_dirty_polls_data():
+    async def run():
+        bot = MagicMock()
+        cog = ScheduledPollCog(bot)
+        data = {"next_scheduled_poll_id": 1, "scheduled_polls": {}}
+        scheduled_polls._polls_data_cache = data
+        scheduled_polls._mark_polls_data_dirty()
+
+        with patch("scheduled_polls._save_polls_data") as save_mock:
+            await cog.cog_unload()
+
+        save_mock.assert_called_once_with(data)
+        assert scheduled_polls._polls_data_dirty is False
+
+    asyncio.run(run())
+
+
 def test_scheduled_poll_loop_posts_only_during_eight_o_clock_hour():
     async def run():
         bot = MagicMock()
@@ -724,7 +773,8 @@ def test_poll_button_allows_users_with_poll_role():
 
         interaction.response.send_message.assert_not_called()
         interaction.response.edit_message.assert_called_once()
-        save_mock.assert_called_once()
+        save_mock.assert_not_called()
+        assert scheduled_polls._polls_data_dirty is True
         assert data["scheduled_polls"]["1"]["active_instance"]["responses"] == {
             "111": ["Montag"]
         }
