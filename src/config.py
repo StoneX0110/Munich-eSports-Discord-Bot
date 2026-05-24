@@ -9,10 +9,15 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
+SRC_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = SRC_ROOT.parent
+DATA_DIR = PROJECT_ROOT / "data"
+LOG_DIR = PROJECT_ROOT / "logs"
+
 # ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------
-load_dotenv()
+load_dotenv(PROJECT_ROOT / ".env")
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 EV_API_KEY = os.getenv("EV_API_KEY", "")
@@ -47,9 +52,9 @@ ABTEILUNGEN_FIELD_ID = 34866629       # "Abteilungen" – multi-select departmen
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-KNOWN_MEMBERS_FILE = Path(__file__).resolve().parent / "known_members.json"
-VOTES_FILE = Path(__file__).resolve().parent / "votes.json"
-POLLS_FILE = Path(__file__).resolve().parent / "scheduled_polls.json"
+KNOWN_MEMBERS_FILE = DATA_DIR / "known_members.json"
+VOTES_FILE = DATA_DIR / "votes.json"
+POLLS_FILE = DATA_DIR / "scheduled_polls.json"
 
 # ---------------------------------------------------------------------------
 # Schedule

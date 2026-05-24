@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 import pytest
 
-import scheduled_polls
-from scheduled_polls import (
+from cogs import scheduled_polls
+from cogs.scheduled_polls import (
     ScheduledPollCog,
     ScheduledPollView,
     _load_polls_data,
@@ -33,7 +33,7 @@ def reset_scheduled_polls_cache():
 def test_load_polls_data_missing(tmp_path):
     """Verify that missing poll configuration file defaults gracefully."""
     test_file = tmp_path / "non_existent.json"
-    with patch("scheduled_polls.POLLS_FILE", test_file):
+    with patch("cogs.scheduled_polls.POLLS_FILE", test_file):
         data = _load_polls_data()
         assert data["next_scheduled_poll_id"] == 1
         assert data["scheduled_polls"] == {}
@@ -41,7 +41,7 @@ def test_load_polls_data_missing(tmp_path):
 def test_load_polls_data_missing_returns_independent_default(tmp_path):
     """Verify fallback data cannot mutate the module-level default."""
     test_file = tmp_path / "non_existent.json"
-    with patch("scheduled_polls.POLLS_FILE", test_file):
+    with patch("cogs.scheduled_polls.POLLS_FILE", test_file):
         data = _load_polls_data()
         data["scheduled_polls"]["1"] = {"weekday": "Montag"}
         fresh_data = _load_polls_data()
@@ -62,7 +62,7 @@ def test_save_and_load_polls_data(tmp_path):
         }
     }
 
-    with patch("scheduled_polls.POLLS_FILE", test_file):
+    with patch("cogs.scheduled_polls.POLLS_FILE", test_file):
         _save_polls_data(test_data)
         loaded_data = _load_polls_data()
         assert loaded_data == test_data
@@ -72,7 +72,7 @@ def test_load_polls_data_corrupt(tmp_path, caplog):
     test_file = tmp_path / "test_polls_corrupt.json"
     test_file.write_text("invalid json string", encoding="utf-8")
 
-    with patch("scheduled_polls.POLLS_FILE", test_file):
+    with patch("cogs.scheduled_polls.POLLS_FILE", test_file):
         with caplog.at_level("ERROR"):
             data = _load_polls_data()
             assert data["next_scheduled_poll_id"] == 1
@@ -84,7 +84,7 @@ def test_load_polls_data_io_error():
     mock_file = MagicMock()
     mock_file.exists.return_value = True
     mock_file.read_text.side_effect = OSError("Read error")
-    with patch("scheduled_polls.POLLS_FILE", mock_file):
+    with patch("cogs.scheduled_polls.POLLS_FILE", mock_file):
         with pytest.raises(OSError):
             _load_polls_data()
 
@@ -92,7 +92,7 @@ def test_save_polls_data_io_error():
     """Verify that OSError is raised when writing the polls file fails."""
     mock_file = MagicMock()
     mock_file.write_text.side_effect = OSError("Write error")
-    with patch("scheduled_polls.POLLS_FILE", mock_file):
+    with patch("cogs.scheduled_polls.POLLS_FILE", mock_file):
         with pytest.raises(OSError):
             _save_polls_data({})
 
@@ -103,7 +103,7 @@ def test_flush_polls_data_writes_only_when_dirty():
     scheduled_polls._polls_data_cache = data
     scheduled_polls._mark_polls_data_dirty()
 
-    with patch("scheduled_polls._save_polls_data") as save_mock:
+    with patch("cogs.scheduled_polls._save_polls_data") as save_mock:
         assert scheduled_polls._flush_polls_data() is True
         save_mock.assert_called_once_with(data)
         assert scheduled_polls._polls_data_dirty is False
@@ -205,9 +205,9 @@ def test_poll_create_without_reminder_stores_no_reminder_config():
         interaction = _department_head_interaction()
         data = {"next_scheduled_poll_id": 1, "scheduled_polls": {}}
 
-        with patch("scheduled_polls._load_polls_data", return_value=data):
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
             save_mock = MagicMock()
-            with patch("scheduled_polls._save_polls_data", save_mock):
+            with patch("cogs.scheduled_polls._save_polls_data", save_mock):
                 await ScheduledPollCog.poll_create.callback(
                     cog,
                     interaction,
@@ -232,9 +232,9 @@ def test_poll_create_with_valid_reminder_stores_reminder_config():
         interaction = _department_head_interaction()
         data = {"next_scheduled_poll_id": 1, "scheduled_polls": {}}
 
-        with patch("scheduled_polls._load_polls_data", return_value=data):
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
             save_mock = MagicMock()
-            with patch("scheduled_polls._save_polls_data", save_mock):
+            with patch("cogs.scheduled_polls._save_polls_data", save_mock):
                 await ScheduledPollCog.poll_create.callback(
                     cog,
                     interaction,
@@ -348,7 +348,7 @@ def test_poll_list_shows_reminder_schedule():
             },
         }
 
-        with patch("scheduled_polls._load_polls_data", return_value=data):
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
             await ScheduledPollCog.poll_list.callback(cog, interaction)
 
         embed = interaction.response.send_message.call_args.kwargs["embed"]
@@ -390,7 +390,7 @@ def test_handle_reminders_skips_poll_without_reminder_config():
                 }
             },
         }
-        with patch("scheduled_polls._load_polls_data", return_value=data):
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
             await cog._handle_reminders(date(2026, 5, 31), 18)  # Sunday
 
         channel.send.assert_not_called()
@@ -424,7 +424,7 @@ def test_handle_reminders_skips_mismatched_reminder_time():
                 }
             },
         }
-        with patch("scheduled_polls._load_polls_data", return_value=data):
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
             await cog._handle_reminders(date(2026, 5, 31), 17)  # Sunday, wrong hour
             await cog._handle_reminders(date(2026, 5, 30), 18)  # Saturday, right hour
 
@@ -438,7 +438,7 @@ def test_scheduled_poll_loop_runs_hourly_checks():
         bot = MagicMock()
         cog = ScheduledPollCog(bot)
 
-        with patch("scheduled_polls.datetime") as datetime_mock:
+        with patch("cogs.scheduled_polls.datetime") as datetime_mock:
             now = datetime(2026, 5, 31, 18, 42, tzinfo=ZoneInfo("Europe/Berlin"))
             datetime_mock.now.return_value = now
             cog._handle_posting = AsyncMock()
@@ -476,7 +476,7 @@ def test_cog_unload_flushes_dirty_polls_data():
         scheduled_polls._polls_data_cache = data
         scheduled_polls._mark_polls_data_dirty()
 
-        with patch("scheduled_polls._save_polls_data") as save_mock:
+        with patch("cogs.scheduled_polls._save_polls_data") as save_mock:
             await cog.cog_unload()
 
         save_mock.assert_called_once_with(data)
@@ -490,7 +490,7 @@ def test_scheduled_poll_loop_posts_only_during_eight_o_clock_hour():
         bot = MagicMock()
         cog = ScheduledPollCog(bot)
 
-        with patch("scheduled_polls.datetime") as datetime_mock:
+        with patch("cogs.scheduled_polls.datetime") as datetime_mock:
             now = datetime(2026, 5, 27, 8, 13, tzinfo=ZoneInfo("Europe/Berlin"))
             datetime_mock.now.return_value = now
             cog._handle_posting = AsyncMock()
@@ -531,10 +531,10 @@ def test_handle_posting_on_matching_weekday(tmp_path):
             },
         }
 
-        with patch("scheduled_polls.POLLS_FILE", polls_file):
-            with patch("scheduled_polls._load_polls_data", return_value=data.copy()):
+        with patch("cogs.scheduled_polls.POLLS_FILE", polls_file):
+            with patch("cogs.scheduled_polls._load_polls_data", return_value=data.copy()):
                 save_mock = MagicMock()
-                with patch("scheduled_polls._save_polls_data", save_mock):
+                with patch("cogs.scheduled_polls._save_polls_data", save_mock):
                     await cog._handle_posting(date(2026, 5, 27))  # Wednesday
 
         channel.send.assert_called_once()
@@ -578,9 +578,9 @@ def test_handle_posting_skips_existing_instance_for_same_target_week():
             },
         }
 
-        with patch("scheduled_polls._load_polls_data", return_value=data):
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
             save_mock = MagicMock()
-            with patch("scheduled_polls._save_polls_data", save_mock):
+            with patch("cogs.scheduled_polls._save_polls_data", save_mock):
                 await cog._handle_posting(date(2026, 5, 27))  # Wednesday
 
         channel.send.assert_not_called()
@@ -624,9 +624,9 @@ def test_handle_posting_uses_poll_data_lock():
             },
         }
         fake_lock = FakeAsyncLock()
-        with patch("scheduled_polls._polls_data_lock", fake_lock, create=True):
-            with patch("scheduled_polls._load_polls_data", return_value=data.copy()):
-                with patch("scheduled_polls._save_polls_data"):
+        with patch("cogs.scheduled_polls._polls_data_lock", fake_lock, create=True):
+            with patch("cogs.scheduled_polls._load_polls_data", return_value=data.copy()):
+                with patch("cogs.scheduled_polls._save_polls_data"):
                     await cog._handle_posting(date(2026, 5, 27))
 
         assert fake_lock.enter_count == 1
@@ -676,9 +676,9 @@ def test_handle_reminders_pings_non_voters():
             },
         }
 
-        with patch("scheduled_polls._load_polls_data", return_value=data.copy()):
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data.copy()):
             save_mock = MagicMock()
-            with patch("scheduled_polls._save_polls_data", save_mock):
+            with patch("cogs.scheduled_polls._save_polls_data", save_mock):
                 await cog._handle_reminders(date(2026, 5, 31), 18)  # Sunday
 
         channel.send.assert_called_once()
@@ -722,8 +722,8 @@ def test_trigger_reminder_forces_selected_poll_without_reminder_config():
                     }
                 },
             }
-            with patch("scheduled_polls._load_polls_data", return_value=data):
-                with patch("scheduled_polls._save_polls_data"):
+            with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
+                with patch("cogs.scheduled_polls._save_polls_data"):
                     await ScheduledPollCog.trigger_reminder.callback(cog, interaction, 1)
 
         reminder_mock.assert_awaited_once()
@@ -766,9 +766,9 @@ def test_poll_button_allows_users_with_poll_role():
             },
         }
 
-        with patch("scheduled_polls._load_polls_data", return_value=data):
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
             save_mock = MagicMock()
-            with patch("scheduled_polls._save_polls_data", save_mock):
+            with patch("cogs.scheduled_polls._save_polls_data", save_mock):
                 await view.make_callback("Montag")(interaction)
 
         interaction.response.send_message.assert_not_called()
@@ -810,9 +810,9 @@ def test_poll_button_rejects_users_without_poll_role():
             },
         }
 
-        with patch("scheduled_polls._load_polls_data", return_value=data):
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
             save_mock = MagicMock()
-            with patch("scheduled_polls._save_polls_data", save_mock):
+            with patch("cogs.scheduled_polls._save_polls_data", save_mock):
                 await view.make_callback("Montag")(interaction)
 
         interaction.response.send_message.assert_called_once_with(
@@ -845,7 +845,7 @@ def test_dev_triggers_allow_department_heads_without_extra_user_id_gate():
         reminder_interaction.followup.send = AsyncMock()
 
         data = {"next_scheduled_poll_id": 1, "scheduled_polls": {}}
-        with patch("scheduled_polls._load_polls_data", return_value=data):
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
             await ScheduledPollCog.trigger_post.callback(cog, post_interaction, 1)
             await ScheduledPollCog.trigger_reminder.callback(cog, reminder_interaction, 1)
 

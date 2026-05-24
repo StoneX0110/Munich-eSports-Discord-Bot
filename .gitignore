@@ -1,5 +1,6 @@
 # Environment
 .env
+.venv/
 venv/
 
 # Python
@@ -7,6 +8,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+.pytest_cache/
 dist/
 build/
 
@@ -21,6 +23,8 @@ logs/
 known_members.json
 votes.json
 scheduled_polls.json
+data/*.json
+!data/.gitkeep
 
-# Docs
-docs/
+# Local planning notes
+docs/superpowers/
