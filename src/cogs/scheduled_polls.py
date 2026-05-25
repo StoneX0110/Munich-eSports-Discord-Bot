@@ -140,10 +140,6 @@ def _format_reminder_schedule(poll: dict) -> str:
     return f"{reminder_weekday} um {reminder_hour:02d}:00"
 
 
-def _poll_week_start_day(poll: dict) -> str:
-    return _normalize_weekday(poll.get("week_start_day") or "Montag") or "Montag"
-
-
 def _weekdays_from_start(week_start_day: str) -> list[str]:
     week_start_day_idx = WEEKDAYS.index(week_start_day)
     return [
@@ -365,7 +361,7 @@ class ScheduledPollCog(commands.Cog):
                         f"**Rolle:** {role_mention}\n"
                         f"**Kanal:** {channel_mention}\n"
                         f"**Postet am:** {poll['weekday']}\n"
-                        f"**Erster Tag der Spielwoche:** {_poll_week_start_day(poll)}\n"
+                        f"**Erster Tag der Spielwoche:** {poll.get('week_start_day', 'Montag')}\n"
                         f"**Reminder:** {_format_reminder_schedule(poll)}"
                     ),
                     inline=False,
@@ -420,19 +416,19 @@ class ScheduledPollCog(commands.Cog):
     )
     @app_commands.describe(
         role="Die Rolle, die für die Umfrage erwähnt wird",
-        postet_am="Wochentag, an dem die Umfrage automatisch gepostet wird",
+        posting_day="Wochentag, an dem die Umfrage automatisch gepostet wird",
         reminder_weekday="Optionaler Wochentag für Reminder-Pings",
         reminder_hour="Optionale Uhrzeit für Reminder-Pings (0-23)",
-        erster_tag_der_spielwoche="Optionaler erster Tag der Spielwoche (Standard: Montag)",
+        week_start_day="Optionaler erster Tag der Spielwoche (Standard: Montag)",
     )
     async def poll_create(
         self,
         interaction: discord.Interaction,
         role: discord.Role,
-        postet_am: str,
+        posting_day: str,
         reminder_weekday: str | None = None,
         reminder_hour: int | None = None,
-        erster_tag_der_spielwoche: str | None = None,
+        week_start_day: str | None = None,
     ):
         if not _can_manage_scheduled_polls(interaction.user):
             await interaction.response.send_message(
@@ -441,26 +437,26 @@ class ScheduledPollCog(commands.Cog):
             )
             return
 
-        normalized = _normalize_weekday(postet_am)
+        normalized = _normalize_weekday(posting_day)
         if normalized is None:
             valid_list = ", ".join(WEEKDAYS)
             await interaction.response.send_message(
-                f"❌ Ungültiger Posting-Wochentag: `{postet_am}`. Gültige Werte: {valid_list}",
+                f"❌ Ungültiger Posting-Wochentag: `{posting_day}`. Gültige Werte: {valid_list}",
                 ephemeral=True,
             )
             return
 
-        erster_tag_der_spielwoche = (
-            erster_tag_der_spielwoche.strip()
-            if erster_tag_der_spielwoche
+        week_start_day = (
+            week_start_day.strip()
+            if week_start_day
             else "Montag"
         )
-        normalized_week_start_day = _normalize_weekday(erster_tag_der_spielwoche)
+        normalized_week_start_day = _normalize_weekday(week_start_day)
         if normalized_week_start_day is None:
             valid_list = ", ".join(WEEKDAYS)
             await interaction.response.send_message(
                 "❌ Ungültiger erster Tag der Spielwoche: "
-                f"`{erster_tag_der_spielwoche}`. Gültige Werte: {valid_list}",
+                f"`{week_start_day}`. Gültige Werte: {valid_list}",
                 ephemeral=True,
             )
             return
@@ -528,8 +524,8 @@ class ScheduledPollCog(commands.Cog):
             ephemeral=True,
         )
 
-    @poll_create.autocomplete("postet_am")
-    async def postet_am_autocomplete(
+    @poll_create.autocomplete("posting_day")
+    async def posting_day_autocomplete(
         self, interaction: discord.Interaction, current: str,
     ) -> list[app_commands.Choice[str]]:
         return [
@@ -548,8 +544,8 @@ class ScheduledPollCog(commands.Cog):
             if current.lower() in day.lower()
         ][:25]
 
-    @poll_create.autocomplete("erster_tag_der_spielwoche")
-    async def erster_tag_der_spielwoche_autocomplete(
+    @poll_create.autocomplete("week_start_day")
+    async def week_start_day_autocomplete(
         self, interaction: discord.Interaction, current: str,
     ) -> list[app_commands.Choice[str]]:
         return [
@@ -626,7 +622,7 @@ class ScheduledPollCog(commands.Cog):
                 if not force and poll["weekday"] != today_weekday:
                     continue
 
-                target_start, _ = _get_target_dates(today, _poll_week_start_day(poll))
+                target_start, _ = _get_target_dates(today, poll.get("week_start_day", "Montag"))
                 target_start_str = target_start.isoformat()
                 if (
                     not force

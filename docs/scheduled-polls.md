@@ -12,9 +12,9 @@ Automatische Verfügbarkeitsumfragen für Trainings, Scrims oder andere regelmä
 
 | Befehl | Beschreibung | Beispiel |
 |--------|-------------|---------|
-| `/scheduled-poll create <role> <postet_am>` | Erstellt eine wöchentliche Umfrage für `role`. Die Umfrage wird in dem Kanal gepostet, in dem der Befehl ausgeführt wird. | `/scheduled-poll create role:@CS Main Team postet_am:Mittwoch` würde jeden Mittwoch das CS Main Team pingen und nach Terminverfügbarkeit für die kommende Spielwoche fragen.|
-| `/scheduled-poll create <role> <postet_am> <reminder_weekday> <reminder_hour>` | Erstellt eine wöchentliche Umfrage mit Reminder. `reminder_hour` ist eine Stunde im 24h-Format von `0` bis `23`. | `/scheduled-poll create role:@CS Main Team postet_am:Mittwoch reminder_weekday:Sonntag reminder_hour:18` macht das gleiche wie oben, nur dass jeden Sonntag um 18 Uhr alle aus dem CS Main Team gepingt werden, die bis dahin noch nicht abgestimmt haben.|
-| `/scheduled-poll create <role> <postet_am> erster_tag_der_spielwoche:<weekday>` | Erstellt eine wöchentliche Umfrage mit frei wählbarem ersten Tag der Spielwoche. Ohne Angabe startet die Spielwoche am Montag. | `/scheduled-poll create role:@CS Main Team postet_am:Mittwoch erster_tag_der_spielwoche:Freitag` fragt die Verfügbarkeit für die nächste Spielwoche von Freitag bis Donnerstag ab. |
+| `/scheduled-poll create <role> <posting_day>` | Erstellt eine wöchentliche Umfrage für `role`. Die Umfrage wird in dem Kanal gepostet, in dem der Befehl ausgeführt wird. | `/scheduled-poll create role:@CS Main Team posting_day:Mittwoch` würde jeden Mittwoch das CS Main Team pingen und nach Terminverfügbarkeit für die kommende Spielwoche fragen.|
+| `/scheduled-poll create <role> <posting_day> <reminder_weekday> <reminder_hour>` | Erstellt eine wöchentliche Umfrage mit Reminder. `reminder_hour` ist eine Stunde im 24h-Format von `0` bis `23`. | `/scheduled-poll create role:@CS Main Team posting_day:Mittwoch reminder_weekday:Sonntag reminder_hour:18` macht das gleiche wie oben, nur dass jeden Sonntag um 18 Uhr alle aus dem CS Main Team gepingt werden, die bis dahin noch nicht abgestimmt haben.|
+| `/scheduled-poll create <role> <posting_day> week_start_day:<weekday>` | Erstellt eine wöchentliche Umfrage mit frei wählbarem ersten Tag der Spielwoche. Ohne Angabe startet die Spielwoche am Montag. | `/scheduled-poll create role:@CS Main Team posting_day:Mittwoch week_start_day:Freitag` fragt die Verfügbarkeit für die nächste Spielwoche von Freitag bis Donnerstag ab. |
 | `/scheduled-poll list` | Zeigt alle eingerichteten wiederkehrenden Umfragen mit ID, Rolle, Kanal, Tag an dem gepostet wird, ersten Tag der Spielwoche und Reminder an. | `/scheduled-poll list` |
 | `/scheduled-poll delete <poll_id>` | Löscht eine wiederkehrende Umfrage. Die ID steht in `/scheduled-poll list` und in der Antwort beim Erstellen. | `/scheduled-poll delete poll_id:1` |
 | `/scheduled-poll trigger-post <poll_id>` | Postet die ausgewählte Umfrage sofort manuell. Nützlich, wenn die Umfrage an einem späteren Tag in der Woche erstellt wird, als sie eigentlich gepostet werden soll. | `/scheduled-poll trigger-post poll_id:1` |
@@ -29,10 +29,10 @@ Automatische Verfügbarkeitsumfragen für Trainings, Scrims oder andere regelmä
 
 | Einstellung | Bedeutung |
 |------------|-----------|
-| `postet_am` | Wochentag, an dem die neue Umfrage automatisch gepostet wird. |
+| `posting_day` | Wochentag, an dem die neue Umfrage automatisch gepostet wird. |
 | Posting-Zeit | Die Umfrage wird in der 08:00-Uhr-Stunde in `Europe/Berlin` gepostet. |
-| `erster_tag_der_spielwoche` | Optionaler erster Wochentag der abgefragten Spielwoche. Standard ist `Montag`. |
-| Spielwoche | Die Umfrage fragt immer die Verfügbarkeit für die nächste Spielwoche ab, beginnend mit `erster_tag_der_spielwoche`. |
+| `week_start_day` | Optionaler erster Wochentag der abgefragten Spielwoche. Standard ist `Montag`. |
+| Spielwoche | Die Umfrage fragt immer die Verfügbarkeit für die nächste Spielwoche ab, beginnend mit `week_start_day`. |
 | `reminder_weekday` | Optionaler Wochentag, an dem Nicht-Antwortende erinnert werden. |
 | `reminder_hour` | Optionale Reminder-Stunde im 24h-Format, z.B. `18` für 18:00 oder `5` für 05:00. |
 
