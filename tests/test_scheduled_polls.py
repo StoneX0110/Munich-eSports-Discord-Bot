@@ -25,9 +25,11 @@ from cogs.scheduled_polls import (
 
 @pytest.fixture(autouse=True)
 def reset_scheduled_polls_cache():
-    scheduled_polls._reset_polls_data_cache()
+    scheduled_polls._polls_data_cache = None
+    scheduled_polls._polls_data_dirty = False
     yield
-    scheduled_polls._reset_polls_data_cache()
+    scheduled_polls._polls_data_cache = None
+    scheduled_polls._polls_data_dirty = False
 
 
 def test_load_polls_data_missing(tmp_path):
@@ -142,27 +144,17 @@ def test_normalize_weekday_invalid():
 def test_get_target_dates():
     # Post day is Wednesday 2026-05-27. Target week starts Monday 2026-06-01
     post_day = date(2026, 5, 27)
-    target_start, days = _get_target_dates(post_day)
-    assert target_start == date(2026, 6, 1)
-    assert len(days) == 7
-    assert days[0] == "01.06."
-    assert days[6] == "07.06."
+    assert _get_target_dates(post_day) == date(2026, 6, 1)
 
 
 def test_get_target_dates_with_friday_start():
     post_day = date(2026, 5, 27)  # Wednesday
-    target_start, days = _get_target_dates(post_day, "Freitag")
-    assert target_start == date(2026, 5, 29)
-    assert days[0] == "01.06."
-    assert days[4] == "29.05."
-    assert days[6] == "31.05."
+    assert _get_target_dates(post_day, "Freitag") == date(2026, 5, 29)
 
 
 def test_get_target_dates_with_matching_start_uses_next_week():
     post_day = date(2026, 5, 29)  # Friday
-    target_start, days = _get_target_dates(post_day, "Freitag")
-    assert target_start == date(2026, 6, 5)
-    assert days[4] == "05.06."
+    assert _get_target_dates(post_day, "Freitag") == date(2026, 6, 5)
 
 
 def test_build_poll_embed():

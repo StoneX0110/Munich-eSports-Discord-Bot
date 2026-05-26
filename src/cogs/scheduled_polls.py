@@ -97,13 +97,6 @@ def _flush_polls_data(force: bool = False) -> bool:
     return True
 
 
-def _reset_polls_data_cache() -> None:
-    """Reset cached scheduled poll data. Intended for tests."""
-    global _polls_data_cache, _polls_data_dirty
-    _polls_data_cache = None
-    _polls_data_dirty = False
-
-
 # ---------------------------------------------------------------------------
 # Authorization & validation helpers
 # ---------------------------------------------------------------------------
@@ -156,20 +149,13 @@ def _weekdays_from_start(week_start_day: str) -> list[str]:
 def _get_target_dates(
     post_date: date,
     week_start_day: str = "Montag",
-) -> tuple[date, list[str]]:
-    """Return the next target start date and formatted dates for all weekdays."""
+) -> date:
+    """Return the next target start date."""
     week_start_day_idx = WEEKDAYS.index(week_start_day)
     days_to_start = (week_start_day_idx - post_date.weekday()) % 7
     if days_to_start == 0:
         days_to_start = 7  # Always starting the week AFTER the poll
-    target_start = post_date + timedelta(days=days_to_start)
-    days_strs = []
-    for day in WEEKDAYS:
-        weekday_idx = WEEKDAYS.index(day)
-        days_from_start = (weekday_idx - week_start_day_idx) % 7
-        d = target_start + timedelta(days=days_from_start)
-        days_strs.append(d.strftime("%d.%m."))
-    return target_start, days_strs
+    return post_date + timedelta(days=days_to_start)
 
 
 def _build_poll_embed(role_id: str | int, target_week_start_str: str, responses: dict) -> discord.Embed:
@@ -392,8 +378,16 @@ class ScheduledPollCog(commands.Cog):
                 poll_missing = True
             else:
                 poll_missing = False
+                deleted_poll = data["scheduled_polls"][poll_key]
                 del data["scheduled_polls"][poll_key]
                 _flush_polls_data(force=True)
+                logger.info(
+                    "Deleted scheduled poll #%s by user %s from channel %s for role %s.",
+                    poll_id,
+                    interaction.user.id,
+                    deleted_poll["channel_id"],
+                    deleted_poll["role_id"],
+                )
 
         if poll_missing:
             await interaction.response.send_message(
@@ -507,6 +501,18 @@ class ScheduledPollCog(commands.Cog):
                 "active_instance": None,
             }
             _flush_polls_data(force=True)
+            logger.info(
+                "Created scheduled poll #%s by user %s in channel %s for role %s; "
+                "posting_day=%s, week_start_day=%s, reminder_weekday=%s, reminder_hour=%s.",
+                poll_id,
+                interaction.user.id,
+                interaction.channel_id,
+                role.id,
+                normalized,
+                normalized_week_start_day,
+                normalized_reminder_weekday,
+                reminder_hour,
+            )
 
         reminder_schedule = _format_reminder_schedule(
             {
@@ -622,7 +628,7 @@ class ScheduledPollCog(commands.Cog):
                 if not force and poll["weekday"] != today_weekday:
                     continue
 
-                target_start, _ = _get_target_dates(today, poll.get("week_start_day", "Montag"))
+                target_start = _get_target_dates(today, poll.get("week_start_day", "Montag"))
                 target_start_str = target_start.isoformat()
                 if (
                     not force
@@ -640,9 +646,9 @@ class ScheduledPollCog(commands.Cog):
                     )
                     continue
 
-                if poll.get("active_instance"):
+                old_inst = poll.get("active_instance")
+                if old_inst:
                     try:
-                        old_inst = poll["active_instance"]
                         old_msg = await channel.fetch_message(old_inst["message_id"])
                         old_embed = old_msg.embeds[0]
                         old_embed.title = "🗳️ (Geschlossen) " + (old_embed.title or "")
@@ -675,9 +681,13 @@ class ScheduledPollCog(commands.Cog):
                     }
                     changed = True
                     logger.info(
-                        "Posted scheduled poll #%s to channel %s.",
+                        "Posted active instance for scheduled poll #%s to channel %s; "
+                        "message_id=%s, target_week_start=%s, replaced_existing=%s.",
                         current_poll_id,
                         channel.id,
+                        msg.id,
+                        target_start_str,
+                        old_inst is not None,
                     )
                 except discord.HTTPException:
                     logger.exception("Failed to post scheduled poll #%s.", current_poll_id)
@@ -740,7 +750,11 @@ class ScheduledPollCog(commands.Cog):
                     await channel.send(reminder_msg)
                     instance["reminded"] = True
                     changed = True
-                    logger.info("Sent reminder for poll #%s.", current_poll_id)
+                    logger.info(
+                        "Marked reminder sent for scheduled poll #%s; message_id=%s.",
+                        current_poll_id,
+                        instance["message_id"],
+                    )
                 except discord.HTTPException:
                     logger.exception(
                         "Failed to send reminder for poll #%s.", current_poll_id
@@ -817,6 +831,12 @@ class ScheduledPollCog(commands.Cog):
                     instance_missing = False
                     instance["reminded"] = False
                     _flush_polls_data(force=True)
+                    logger.info(
+                        "Reset reminder state for scheduled poll #%s by user %s; message_id=%s.",
+                        poll_id,
+                        interaction.user.id,
+                        instance["message_id"],
+                    )
 
         if poll_missing:
             await interaction.followup.send(f"❌ Umfrage #{poll_id} nicht gefunden.")
