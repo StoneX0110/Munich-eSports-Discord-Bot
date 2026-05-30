@@ -521,6 +521,8 @@ async def _setup_hook():
     logger.info("Honeypot cog loaded.")
     await bot.load_extension("cogs.scheduled_polls")
     logger.info("Scheduled polls cog loaded.")
+    await bot.load_extension("cogs.scheduled_reminders")
+    logger.info("Scheduled reminders cog loaded.")
     await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
     logger.info("Slash commands synced.")
 

@@ -56,6 +56,7 @@ ABTEILUNGEN_FIELD_ID = 34866629       # "Abteilungen" – multi-select departmen
 KNOWN_MEMBERS_FILE = DATA_DIR / "known_members.json"
 VOTES_FILE = DATA_DIR / "votes.json"
 POLLS_FILE = DATA_DIR / "scheduled_polls.json"
+REMINDERS_FILE = DATA_DIR / "scheduled_reminders.json"
 
 # ---------------------------------------------------------------------------
 # Schedule
