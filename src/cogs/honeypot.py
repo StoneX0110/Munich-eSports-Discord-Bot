@@ -3,7 +3,7 @@ Honeypot channel: ban anyone who posts in the trap channel and log to mod channe
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord.ext import commands
@@ -61,6 +61,37 @@ class HoneypotCog(commands.Cog):
             return
 
         member = message.author
+        if not isinstance(member, discord.Member):
+            return
+
+        joined_at = member.joined_at
+        if joined_at is not None and (
+            datetime.now(timezone.utc) - joined_at > timedelta(days=30)
+        ):
+            try:
+                await message.channel.set_permissions(
+                    member,
+                    view_channel=False,
+                    reason="Honeypot channel post (member joined over 1 month ago)",
+                )
+                logger.info(
+                    "Removed honeypot view permission for %s (%s); "
+                    "joined %s, not banning.",
+                    member,
+                    member.id,
+                    joined_at,
+                )
+            except discord.Forbidden:
+                logger.exception(
+                    "Missing permissions to update honeypot channel overwrite "
+                    "for %s.",
+                    member.id,
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "Failed to update honeypot channel overwrite for %s.", member.id
+                )
+            return
 
         try:
             await _notify_mod_channel(mod_channel, message)
