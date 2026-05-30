@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import discord
-import pytest
 
 import config
 from cogs import scheduled_reminders
@@ -17,86 +16,25 @@ from cogs.scheduled_reminders import (
     ScheduledReminderCog,
     _load_reminders_data,
     _save_reminders_data,
-    _normalize_weekday,
     setup,
 )
 
 
-def test_load_reminders_data_missing(tmp_path):
-    test_file = tmp_path / "non_existent.json"
-    with patch("cogs.scheduled_reminders.REMINDERS_FILE", test_file):
-        data = _load_reminders_data()
-
-    assert data["next_scheduled_reminder_id"] == 1
-    assert data["scheduled_reminders"] == {}
-
-
-def test_load_reminders_data_missing_returns_independent_default(tmp_path):
-    test_file = tmp_path / "non_existent.json"
-    with patch("cogs.scheduled_reminders.REMINDERS_FILE", test_file):
-        data = _load_reminders_data()
-        data["scheduled_reminders"]["1"] = {"weekday": "Montag"}
-        fresh_data = _load_reminders_data()
-
-    assert fresh_data["scheduled_reminders"] == {}
-
-
-def test_save_and_load_reminders_data(tmp_path):
-    test_file = tmp_path / "test_reminders.json"
-    test_data = {
+def test_reminders_data_wrappers_delegate_to_configured_store():
+    store = MagicMock()
+    loaded_data = {"next_scheduled_reminder_id": 1, "scheduled_reminders": {}}
+    saved_data = {
         "next_scheduled_reminder_id": 2,
-        "scheduled_reminders": {
-            "1": {
-                "channel_id": 100,
-                "role_id": 200,
-                "weekday": "Mittwoch",
-                "hour": 18,
-                "message": "Scrim reminder",
-                "created_by": 300,
-                "created_at": "2026-05-30T12:00:00+02:00",
-                "last_sent_date": None,
-                "last_sent_at": None,
-            }
-        },
+        "scheduled_reminders": {"1": _base_reminder()},
     }
+    store.load.return_value = loaded_data
 
-    with patch("cogs.scheduled_reminders.REMINDERS_FILE", test_file):
-        _save_reminders_data(test_data)
-        loaded_data = _load_reminders_data()
+    with patch("cogs.scheduled_reminders._reminders_store", return_value=store):
+        assert _load_reminders_data() == loaded_data
+        _save_reminders_data(saved_data)
 
-    assert loaded_data == test_data
-
-
-def test_load_reminders_data_corrupt(tmp_path, caplog):
-    test_file = tmp_path / "test_reminders_corrupt.json"
-    test_file.write_text("invalid json string", encoding="utf-8")
-
-    with patch("cogs.scheduled_reminders.REMINDERS_FILE", test_file):
-        with caplog.at_level("ERROR"):
-            data = _load_reminders_data()
-
-    assert data["next_scheduled_reminder_id"] == 1
-    assert data["scheduled_reminders"] == {}
-    assert any("Corrupt scheduled reminders file detected" in record.message for record in caplog.records)
-
-
-def test_load_reminders_data_io_error():
-    mock_file = MagicMock()
-    mock_file.exists.return_value = True
-    mock_file.read_text.side_effect = OSError("Read error")
-
-    with patch("cogs.scheduled_reminders.REMINDERS_FILE", mock_file):
-        with pytest.raises(OSError):
-            _load_reminders_data()
-
-
-def test_save_reminders_data_io_error():
-    mock_file = MagicMock()
-    mock_file.write_text.side_effect = OSError("Write error")
-
-    with patch("cogs.scheduled_reminders.REMINDERS_FILE", mock_file):
-        with pytest.raises(OSError):
-            _save_reminders_data({})
+    store.load.assert_called_once_with()
+    store.save.assert_called_once_with(saved_data)
 
 
 def test_reminder_list_reads_latest_file_data_without_cache(tmp_path):
@@ -132,18 +70,6 @@ def test_reminder_list_reads_latest_file_data_without_cache(tmp_path):
 
 def test_scheduled_reminder_staff_role_comes_from_config():
     assert scheduled_reminders.STAFF_ROLE_ID == config.STAFF_ROLE_ID
-
-
-def test_normalize_weekday_valid():
-    assert _normalize_weekday("mittwoch") == "Mittwoch"
-    assert _normalize_weekday("Montag") == "Montag"
-    assert _normalize_weekday("FREITAG") == "Freitag"
-
-
-def test_normalize_weekday_invalid():
-    assert _normalize_weekday("Wednesday") is None
-    assert _normalize_weekday("notaday") is None
-    assert _normalize_weekday("") is None
 
 
 def _department_head_interaction():

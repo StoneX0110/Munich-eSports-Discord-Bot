@@ -3,16 +3,24 @@ Helper functions for managing scheduled poll configuration and persistency.
 """
 
 import asyncio
-import json
 import logging
 from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import DEPARTMENT_HEAD_ROLE_ID, GUILD_ID, POLLS_FILE, STAFF_ROLE_ID
+from utils.scheduled import (
+    BERLIN_TZ,
+    JsonScheduleStore,
+    WEEKDAYS,
+    member_has_any_role,
+    normalize_weekday,
+    now_berlin_iso,
+    weekday_choices,
+    weekday_name,
+)
 
 logger = logging.getLogger("munich_esports_bot.scheduled_polls")
 
@@ -21,7 +29,6 @@ DEFAULT_POLLS_DATA = {
     "scheduled_polls": {}
 }
 
-WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
 POLLS_FLUSH_INTERVAL_SECONDS = 60
 SCHEDULED_POLL_MANAGER_ROLE_IDS = {DEPARTMENT_HEAD_ROLE_ID, STAFF_ROLE_ID}
 _polls_data_lock = asyncio.Lock()
@@ -33,25 +40,6 @@ _polls_data_dirty = False
 # Persistence helpers
 # ---------------------------------------------------------------------------
 
-def _load_polls_data() -> dict:
-    """
-    Loads scheduled polls configuration from the JSON storage file.
-
-    If the file does not exist, returns the default structure.
-    If the file is corrupt or unreadable, logs the error and returns the default structure.
-    """
-    if not POLLS_FILE.exists():
-        return _default_polls_data()
-    try:
-        return json.loads(POLLS_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        logger.exception("Corrupt scheduled polls file detected. Falling back to default empty structure.")
-        return _default_polls_data()
-    except OSError:
-        logger.exception("Failed to read scheduled polls file due to an I/O error.")
-        raise  # Raising prevents silent overwrite/data loss on subsequent save
-
-
 def _default_polls_data() -> dict:
     return {
         "next_scheduled_poll_id": DEFAULT_POLLS_DATA["next_scheduled_poll_id"],
@@ -59,15 +47,32 @@ def _default_polls_data() -> dict:
     }
 
 
+def _polls_store() -> JsonScheduleStore:
+    return JsonScheduleStore(
+        file_path=POLLS_FILE,
+        default_factory=_default_polls_data,
+        logger=logger,
+        corrupt_log_message="Corrupt scheduled polls file detected. Falling back to default empty structure.",
+        read_error_log_message="Failed to read scheduled polls file due to an I/O error.",
+        write_error_log_message="Failed to save scheduled polls data.",
+    )
+
+
+def _load_polls_data() -> dict:
+    """
+    Loads scheduled polls configuration from the JSON storage file.
+
+    If the file does not exist, returns the default structure.
+    If the file is corrupt or unreadable, logs the error and returns the default structure.
+    """
+    return _polls_store().load()
+
+
 def _save_polls_data(data: dict) -> None:
     """
     Saves the scheduled polls configuration to the JSON storage file.
     """
-    try:
-        POLLS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        logger.exception("Failed to save scheduled polls data.")
-        raise
+    _polls_store().save(data)
 
 
 def _get_polls_data() -> dict:
@@ -103,7 +108,7 @@ def _flush_polls_data(force: bool = False) -> bool:
 
 def _can_manage_scheduled_polls(member: discord.Member) -> bool:
     """Check whether a Discord member can manage scheduled polls."""
-    return any(r.id in SCHEDULED_POLL_MANAGER_ROLE_IDS for r in member.roles)
+    return member_has_any_role(member, SCHEDULED_POLL_MANAGER_ROLE_IDS)
 
 
 def _normalize_weekday(day: str) -> str | None:
@@ -111,18 +116,15 @@ def _normalize_weekday(day: str) -> str | None:
 
     Returns the capitalized weekday name if valid, otherwise None.
     """
-    for valid in WEEKDAYS:
-        if day.lower() == valid.lower():
-            return valid
-    return None
+    return normalize_weekday(day)
 
 
 def _now_iso() -> str:
-    return datetime.now(ZoneInfo("Europe/Berlin")).isoformat()
+    return now_berlin_iso()
 
 
 def _weekday_name(day: date) -> str:
-    return WEEKDAYS[day.weekday()]
+    return weekday_name(day)
 
 
 def _format_reminder_schedule(poll: dict) -> str:
@@ -534,31 +536,19 @@ class ScheduledPollCog(commands.Cog):
     async def posting_day_autocomplete(
         self, interaction: discord.Interaction, current: str,
     ) -> list[app_commands.Choice[str]]:
-        return [
-            app_commands.Choice(name=day, value=day)
-            for day in WEEKDAYS
-            if current.lower() in day.lower()
-        ][:25]
+        return weekday_choices(current)
 
     @poll_create.autocomplete("reminder_weekday")
     async def reminder_weekday_autocomplete(
         self, interaction: discord.Interaction, current: str,
     ) -> list[app_commands.Choice[str]]:
-        return [
-            app_commands.Choice(name=day, value=day)
-            for day in WEEKDAYS
-            if current.lower() in day.lower()
-        ][:25]
+        return weekday_choices(current)
 
     @poll_create.autocomplete("week_start_day")
     async def week_start_day_autocomplete(
         self, interaction: discord.Interaction, current: str,
     ) -> list[app_commands.Choice[str]]:
-        return [
-            app_commands.Choice(name=day, value=day)
-            for day in WEEKDAYS
-            if current.lower() in day.lower()
-        ][:25]
+        return weekday_choices(current)
 
     # -----------------------------------------------------------------------
     # Lifecycle & background scheduling
@@ -600,7 +590,7 @@ class ScheduledPollCog(commands.Cog):
 
     @tasks.loop(hours=1)
     async def scheduled_poll_loop(self):
-        now = datetime.now(ZoneInfo("Europe/Berlin"))
+        now = datetime.now(BERLIN_TZ)
         logger.info(
             "Scheduled polls tick. Hour: %d, Weekday: %s",
             now.hour,
@@ -793,7 +783,7 @@ class ScheduledPollCog(commands.Cog):
             return
 
         await self._handle_posting(
-            datetime.now(ZoneInfo("Europe/Berlin")).date(),
+            datetime.now(BERLIN_TZ).date(),
             poll_id=poll_key,
             force=True,
         )
@@ -848,7 +838,7 @@ class ScheduledPollCog(commands.Cog):
             )
             return
 
-        now = datetime.now(ZoneInfo("Europe/Berlin"))
+        now = datetime.now(BERLIN_TZ)
         await self._handle_reminders(
             now.date(),
             now.hour,

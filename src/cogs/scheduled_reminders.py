@@ -3,16 +3,24 @@ Helper functions and slash commands for recurring role-ping reminders.
 """
 
 import asyncio
-import json
 import logging
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import DEPARTMENT_HEAD_ROLE_ID, GUILD_ID, REMINDERS_FILE, STAFF_ROLE_ID
+from utils.scheduled import (
+    BERLIN_TZ,
+    JsonScheduleStore,
+    WEEKDAYS,
+    member_has_any_role,
+    normalize_weekday,
+    now_berlin_iso,
+    weekday_choices,
+    weekday_name,
+)
 
 logger = logging.getLogger("munich_esports_bot.scheduled_reminders")
 
@@ -21,7 +29,6 @@ DEFAULT_REMINDERS_DATA = {
     "scheduled_reminders": {},
 }
 
-WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
 SCHEDULED_REMINDER_MANAGER_ROLE_IDS = {DEPARTMENT_HEAD_ROLE_ID, STAFF_ROLE_ID}
 MAX_DISCORD_MESSAGE_LENGTH = 2000
 _reminders_data_lock = asyncio.Lock()
@@ -31,25 +38,6 @@ _reminders_data_lock = asyncio.Lock()
 # Persistence helpers
 # ---------------------------------------------------------------------------
 
-def _load_reminders_data() -> dict:
-    """
-    Loads scheduled reminder configuration from the JSON storage file.
-
-    If the file does not exist, returns the default structure.
-    If the file is corrupt, logs the error and returns the default structure.
-    """
-    if not REMINDERS_FILE.exists():
-        return _default_reminders_data()
-    try:
-        return json.loads(REMINDERS_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        logger.exception("Corrupt scheduled reminders file detected. Falling back to default empty structure.")
-        return _default_reminders_data()
-    except OSError:
-        logger.exception("Failed to read scheduled reminders file due to an I/O error.")
-        raise
-
-
 def _default_reminders_data() -> dict:
     return {
         "next_scheduled_reminder_id": DEFAULT_REMINDERS_DATA["next_scheduled_reminder_id"],
@@ -57,13 +45,30 @@ def _default_reminders_data() -> dict:
     }
 
 
+def _reminders_store() -> JsonScheduleStore:
+    return JsonScheduleStore(
+        file_path=REMINDERS_FILE,
+        default_factory=_default_reminders_data,
+        logger=logger,
+        corrupt_log_message="Corrupt scheduled reminders file detected. Falling back to default empty structure.",
+        read_error_log_message="Failed to read scheduled reminders file due to an I/O error.",
+        write_error_log_message="Failed to save scheduled reminders data.",
+    )
+
+
+def _load_reminders_data() -> dict:
+    """
+    Loads scheduled reminder configuration from the JSON storage file.
+
+    If the file does not exist, returns the default structure.
+    If the file is corrupt, logs the error and returns the default structure.
+    """
+    return _reminders_store().load()
+
+
 def _save_reminders_data(data: dict) -> None:
     """Saves the scheduled reminders configuration to the JSON storage file."""
-    try:
-        REMINDERS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        logger.exception("Failed to save scheduled reminders data.")
-        raise
+    _reminders_store().save(data)
 
 
 # ---------------------------------------------------------------------------
@@ -72,23 +77,20 @@ def _save_reminders_data(data: dict) -> None:
 
 def _can_manage_scheduled_reminders(member: discord.Member) -> bool:
     """Check whether a Discord member can manage scheduled reminders."""
-    return any(r.id in SCHEDULED_REMINDER_MANAGER_ROLE_IDS for r in member.roles)
+    return member_has_any_role(member, SCHEDULED_REMINDER_MANAGER_ROLE_IDS)
 
 
 def _normalize_weekday(day: str) -> str | None:
     """Normalize and validate a German weekday name, case-insensitively."""
-    for valid in WEEKDAYS:
-        if day.lower() == valid.lower():
-            return valid
-    return None
+    return normalize_weekday(day)
 
 
 def _now_iso() -> str:
-    return datetime.now(ZoneInfo("Europe/Berlin")).isoformat()
+    return now_berlin_iso()
 
 
 def _weekday_name(day: date) -> str:
-    return WEEKDAYS[day.weekday()]
+    return weekday_name(day)
 
 
 def _format_schedule(reminder: dict) -> str:
@@ -324,11 +326,7 @@ class ScheduledReminderCog(commands.Cog):
     async def weekday_autocomplete(
         self, interaction: discord.Interaction, current: str,
     ) -> list[app_commands.Choice[str]]:
-        return [
-            app_commands.Choice(name=day, value=day)
-            for day in WEEKDAYS
-            if current.lower() in day.lower()
-        ][:25]
+        return weekday_choices(current)
 
     # -----------------------------------------------------------------------
     # Lifecycle & background scheduling
@@ -344,7 +342,7 @@ class ScheduledReminderCog(commands.Cog):
 
     @tasks.loop(hours=1)
     async def scheduled_reminder_loop(self):
-        now = datetime.now(ZoneInfo("Europe/Berlin"))
+        now = datetime.now(BERLIN_TZ)
         logger.info(
             "Scheduled reminders tick. Hour: %d, Weekday: %s",
             now.hour,
@@ -444,7 +442,7 @@ class ScheduledReminderCog(commands.Cog):
             await interaction.followup.send(f"❌ Reminder #{reminder_id} nicht gefunden.")
             return
 
-        now = datetime.now(ZoneInfo("Europe/Berlin"))
+        now = datetime.now(BERLIN_TZ)
         sent_count = await self._handle_sending(
             now.date(),
             now.hour,
