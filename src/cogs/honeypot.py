@@ -8,14 +8,14 @@ from datetime import datetime, timedelta, timezone
 import discord
 from discord.ext import commands
 
-from config import GUILD_ID, HONEYPOT_CHANNEL_ID, MOD_CHANNEL_ID
+from config import GUILD_ID, HONEYPOT_CHANNEL_ID, MOD_CHANNEL_ID, HONEYPOT_SPARE_AFTER_DAYS
 
 logger = logging.getLogger("munich_esports_bot.honeypot")
 
 
 async def _notify_mod_channel(
-    mod_channel: discord.abc.Messageable,
-    message: discord.Message,
+        mod_channel: discord.abc.Messageable,
+        message: discord.Message,
 ) -> None:
     if message.is_forwardable():
         try:
@@ -42,11 +42,11 @@ class HoneypotCog(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         guild = message.guild
         if (
-            message.author.id == self.bot.user.id
-            or message.webhook_id is not None
-            or guild is None
-            or guild.id != GUILD_ID
-            or message.channel.id != HONEYPOT_CHANNEL_ID
+                message.author.id == self.bot.user.id
+                or message.webhook_id is not None
+                or guild is None
+                or guild.id != GUILD_ID
+                or message.channel.id != HONEYPOT_CHANNEL_ID
         ):
             return
 
@@ -66,7 +66,7 @@ class HoneypotCog(commands.Cog):
 
         joined_at = member.joined_at
         if joined_at is not None and (
-            datetime.now(timezone.utc) - joined_at > timedelta(days=30)
+                datetime.now(timezone.utc) - joined_at > timedelta(days=HONEYPOT_SPARE_AFTER_DAYS)
         ):
             try:
                 await message.channel.set_permissions(
