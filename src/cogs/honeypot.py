@@ -91,6 +91,18 @@ class HoneypotCog(commands.Cog):
                 )
             except discord.HTTPException:
                 logger.exception("Failed to update honeypot channel overwrite for %s.", member.id)
+            try:
+                await message.delete()
+            except discord.Forbidden:
+                logger.exception(
+                    "Missing permissions to delete trusted honeypot message from %s.",
+                    member.id,
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "Failed to delete trusted honeypot message from %s.",
+                    member.id,
+                )
             return
 
         try:
