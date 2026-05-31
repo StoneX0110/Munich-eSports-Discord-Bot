@@ -350,20 +350,23 @@ class ScheduledReminderCog(commands.Cog):
         )
         await self._handle_sending(now.date(), now.hour)
 
+    @scheduled_reminder_loop.before_loop
+    async def before_scheduled_reminder_loop(self):
+        await self.bot.wait_until_ready()
+
     async def _handle_sending(
         self,
         today: date,
         current_hour: int | None = None,
         reminder_id: str | None = None,
         force: bool = False,
-    ) -> int:
-        sent_count = 0
+    ) -> bool:
+        today_weekday = _weekday_name(today)
+        today_str = today.isoformat()
 
         async with _reminders_data_lock:
             data = _load_reminders_data()
-            changed = False
-            today_weekday = _weekday_name(today)
-            today_str = today.isoformat()
+            due_reminders = []
 
             for current_reminder_id, reminder in data.get("scheduled_reminders", {}).items():
                 if reminder_id is not None and current_reminder_id != reminder_id:
@@ -377,44 +380,62 @@ class ScheduledReminderCog(commands.Cog):
                     if reminder.get("last_sent_date") == today_str:
                         continue
 
-                channel = self.bot.get_channel(reminder["channel_id"])
-                guild = self.bot.get_guild(GUILD_ID)
-                role = guild.get_role(reminder["role_id"]) if guild else None
+                due_reminders.append((current_reminder_id, reminder.copy()))
 
-                if not channel or not role:
-                    logger.warning(
-                        "Channel or role not found for scheduled reminder #%s; channel_id=%s, role_id=%s.",
-                        current_reminder_id,
-                        reminder["channel_id"],
-                        reminder["role_id"],
-                    )
-                    continue
+        sent_reminders = []
+        for current_reminder_id, reminder in due_reminders:
+            channel = self.bot.get_channel(reminder["channel_id"])
+            guild = self.bot.get_guild(GUILD_ID)
+            role = guild.get_role(reminder["role_id"]) if guild else None
 
-                role_mention = getattr(role, "mention", f"<@&{reminder['role_id']}>")
-                content = _build_reminder_content(role_mention, reminder["message"])
+            if not channel or not role:
+                logger.warning(
+                    "Channel or role not found for scheduled reminder #%s; channel_id=%s, role_id=%s.",
+                    current_reminder_id,
+                    reminder["channel_id"],
+                    reminder["role_id"],
+                )
+                continue
 
-                try:
-                    await channel.send(
-                        content,
-                        allowed_mentions=_allowed_mentions_for(role),
-                    )
+            role_mention = getattr(role, "mention", f"<@&{reminder['role_id']}>")
+            content = _build_reminder_content(role_mention, reminder["message"])
+
+            try:
+                await channel.send(
+                    content,
+                    allowed_mentions=_allowed_mentions_for(role),
+                )
+                sent_at = _now_iso()
+                sent_reminders.append((current_reminder_id, sent_at))
+                logger.info(
+                    "Sent scheduled reminder #%s to channel %s for role %s.",
+                    current_reminder_id,
+                    reminder["channel_id"],
+                    reminder["role_id"],
+                )
+            except discord.HTTPException:
+                logger.exception("Failed to send scheduled reminder #%s.", current_reminder_id)
+
+        if sent_reminders:
+            async with _reminders_data_lock:
+                data = _load_reminders_data()
+                reminders = data.get("scheduled_reminders", {})
+                changed = False
+
+                for current_reminder_id, sent_at in sent_reminders:
+                    reminder = reminders.get(current_reminder_id)
+                    if reminder is None:
+                        continue
+
                     reminder["last_sent_date"] = today_str
-                    reminder["last_sent_at"] = _now_iso()
+                    reminder["last_sent_at"] = sent_at
                     changed = True
-                    sent_count += 1
-                    logger.info(
-                        "Sent scheduled reminder #%s to channel %s for role %s.",
-                        current_reminder_id,
-                        reminder["channel_id"],
-                        reminder["role_id"],
-                    )
-                except discord.HTTPException:
-                    logger.exception("Failed to send scheduled reminder #%s.", current_reminder_id)
 
-            if changed:
-                _save_reminders_data(data)
+                if changed:
+                    _save_reminders_data(data)
+                    return True
 
-        return sent_count
+        return False
 
     # -----------------------------------------------------------------------
     # Developer verification command
@@ -443,14 +464,14 @@ class ScheduledReminderCog(commands.Cog):
             return
 
         now = datetime.now(BERLIN_TZ)
-        sent_count = await self._handle_sending(
+        sent = await self._handle_sending(
             now.date(),
             now.hour,
             reminder_id=reminder_key,
             force=True,
         )
 
-        if sent_count:
+        if sent:
             await interaction.followup.send(
                 f"✅ Trigger-Send für Reminder #{reminder_id} ausgeführt!"
             )

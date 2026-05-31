@@ -419,9 +419,9 @@ def test_handle_sending_on_matching_schedule_updates_state():
         with patch("cogs.scheduled_reminders._load_reminders_data", return_value=data):
             save_mock = MagicMock()
             with patch("cogs.scheduled_reminders._save_reminders_data", save_mock):
-                sent_count = await cog._handle_sending(date(2026, 5, 27), 18)
+                sent = await cog._handle_sending(date(2026, 5, 27), 18)
 
-        assert sent_count == 1
+        assert sent is True
         channel.send.assert_called_once()
         content = channel.send.call_args[0][0]
         kwargs = channel.send.call_args.kwargs
@@ -451,10 +451,11 @@ def test_handle_sending_skips_mismatched_schedule():
         with patch("cogs.scheduled_reminders._load_reminders_data", return_value=data):
             save_mock = MagicMock()
             with patch("cogs.scheduled_reminders._save_reminders_data", save_mock):
-                sent_count = await cog._handle_sending(date(2026, 5, 27), 17)
-                sent_count += await cog._handle_sending(date(2026, 5, 28), 18)
+                sent_wrong_hour = await cog._handle_sending(date(2026, 5, 27), 17)
+                sent_wrong_day = await cog._handle_sending(date(2026, 5, 28), 18)
 
-        assert sent_count == 0
+        assert sent_wrong_hour is False
+        assert sent_wrong_day is False
         channel.send.assert_not_called()
         save_mock.assert_not_called()
 
@@ -477,9 +478,9 @@ def test_handle_sending_skips_automatic_duplicate_for_same_date():
         with patch("cogs.scheduled_reminders._load_reminders_data", return_value=data):
             save_mock = MagicMock()
             with patch("cogs.scheduled_reminders._save_reminders_data", save_mock):
-                sent_count = await cog._handle_sending(date(2026, 5, 27), 18)
+                sent = await cog._handle_sending(date(2026, 5, 27), 18)
 
-        assert sent_count == 0
+        assert sent is False
         channel.send.assert_not_called()
         save_mock.assert_not_called()
 
@@ -506,9 +507,9 @@ def test_handle_sending_force_sends_despite_duplicate_for_same_date():
         with patch("cogs.scheduled_reminders._load_reminders_data", return_value=data):
             save_mock = MagicMock()
             with patch("cogs.scheduled_reminders._save_reminders_data", save_mock):
-                sent_count = await cog._handle_sending(date(2026, 5, 27), 18, reminder_id="1", force=True)
+                sent = await cog._handle_sending(date(2026, 5, 27), 18, reminder_id="1", force=True)
 
-        assert sent_count == 1
+        assert sent is True
         channel.send.assert_called_once()
         save_mock.assert_called_once()
 
@@ -528,9 +529,9 @@ def test_handle_sending_missing_channel_or_role_does_not_mark_sent():
         with patch("cogs.scheduled_reminders._load_reminders_data", return_value=data):
             save_mock = MagicMock()
             with patch("cogs.scheduled_reminders._save_reminders_data", save_mock):
-                sent_count = await cog._handle_sending(date(2026, 5, 27), 18)
+                sent = await cog._handle_sending(date(2026, 5, 27), 18)
 
-        assert sent_count == 0
+        assert sent is False
         assert data["scheduled_reminders"]["1"]["last_sent_date"] is None
         save_mock.assert_not_called()
 
@@ -556,9 +557,9 @@ def test_handle_sending_http_exception_does_not_mark_sent():
         with patch("cogs.scheduled_reminders._load_reminders_data", return_value=data):
             save_mock = MagicMock()
             with patch("cogs.scheduled_reminders._save_reminders_data", save_mock):
-                sent_count = await cog._handle_sending(date(2026, 5, 27), 18)
+                sent = await cog._handle_sending(date(2026, 5, 27), 18)
 
-        assert sent_count == 0
+        assert sent is False
         assert data["scheduled_reminders"]["1"]["last_sent_date"] is None
         save_mock.assert_not_called()
 
@@ -577,7 +578,7 @@ def test_trigger_send_sends_selected_reminder_immediately():
             "scheduled_reminders": {"1": _base_reminder()},
         }
 
-        with patch.object(cog, "_handle_sending", AsyncMock(return_value=1)) as send_mock:
+        with patch.object(cog, "_handle_sending", AsyncMock(return_value=True)) as send_mock:
             with patch("cogs.scheduled_reminders._load_reminders_data", return_value=data):
                 await ScheduledReminderCog.trigger_send.callback(cog, interaction, 1)
 
