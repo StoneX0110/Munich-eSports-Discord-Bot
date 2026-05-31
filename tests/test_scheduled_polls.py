@@ -4,7 +4,6 @@ Unit and integration tests for scheduled polls helper and logic.
 
 import asyncio
 from datetime import date, datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 import pytest
@@ -16,7 +15,6 @@ from cogs.scheduled_polls import (
     ScheduledPollView,
     _load_polls_data,
     _save_polls_data,
-    _normalize_weekday,
     _get_target_dates,
     _build_poll_embed,
     setup,
@@ -32,71 +30,21 @@ def reset_scheduled_polls_cache():
     scheduled_polls._polls_data_dirty = False
 
 
-def test_load_polls_data_missing(tmp_path):
-    """Verify that missing poll configuration file defaults gracefully."""
-    test_file = tmp_path / "non_existent.json"
-    with patch("cogs.scheduled_polls.POLLS_FILE", test_file):
-        data = _load_polls_data()
-        assert data["next_scheduled_poll_id"] == 1
-        assert data["scheduled_polls"] == {}
-
-def test_load_polls_data_missing_returns_independent_default(tmp_path):
-    """Verify fallback data cannot mutate the module-level default."""
-    test_file = tmp_path / "non_existent.json"
-    with patch("cogs.scheduled_polls.POLLS_FILE", test_file):
-        data = _load_polls_data()
-        data["scheduled_polls"]["1"] = {"weekday": "Montag"}
-        fresh_data = _load_polls_data()
-
-    assert fresh_data["scheduled_polls"] == {}
-
-def test_save_and_load_polls_data(tmp_path):
-    """Verify that save and load roundtrip maintains dict structure and values."""
-    test_file = tmp_path / "test_polls.json"
-    test_data = {
-        "next_scheduled_poll_id": 42,
-        "scheduled_polls": {
-            "1": {
-                "channel_id": 12345,
-                "question": "Fav game?",
-                "options": ["LoL", "CS"]
-            }
-        }
+def test_polls_data_wrappers_delegate_to_configured_store():
+    store = MagicMock()
+    loaded_data = {"next_scheduled_poll_id": 1, "scheduled_polls": {}}
+    saved_data = {
+        "next_scheduled_poll_id": 2,
+        "scheduled_polls": {"1": {"weekday": "Montag"}},
     }
+    store.load.return_value = loaded_data
 
-    with patch("cogs.scheduled_polls.POLLS_FILE", test_file):
-        _save_polls_data(test_data)
-        loaded_data = _load_polls_data()
-        assert loaded_data == test_data
+    with patch("cogs.scheduled_polls._polls_store", return_value=store):
+        assert _load_polls_data() == loaded_data
+        _save_polls_data(saved_data)
 
-def test_load_polls_data_corrupt(tmp_path, caplog):
-    """Verify corrupt JSON logs the error and gracefully defaults."""
-    test_file = tmp_path / "test_polls_corrupt.json"
-    test_file.write_text("invalid json string", encoding="utf-8")
-
-    with patch("cogs.scheduled_polls.POLLS_FILE", test_file):
-        with caplog.at_level("ERROR"):
-            data = _load_polls_data()
-            assert data["next_scheduled_poll_id"] == 1
-            assert data["scheduled_polls"] == {}
-            assert any("Corrupt scheduled polls file detected" in record.message for record in caplog.records)
-
-def test_load_polls_data_io_error():
-    """Verify that OSError is raised when reading the polls file fails."""
-    mock_file = MagicMock()
-    mock_file.exists.return_value = True
-    mock_file.read_text.side_effect = OSError("Read error")
-    with patch("cogs.scheduled_polls.POLLS_FILE", mock_file):
-        with pytest.raises(OSError):
-            _load_polls_data()
-
-def test_save_polls_data_io_error():
-    """Verify that OSError is raised when writing the polls file fails."""
-    mock_file = MagicMock()
-    mock_file.write_text.side_effect = OSError("Write error")
-    with patch("cogs.scheduled_polls.POLLS_FILE", mock_file):
-        with pytest.raises(OSError):
-            _save_polls_data({})
+    store.load.assert_called_once_with()
+    store.save.assert_called_once_with(saved_data)
 
 
 def test_flush_polls_data_writes_only_when_dirty():
@@ -118,23 +66,6 @@ def test_scheduled_poll_staff_role_comes_from_config():
     """Verify scheduled poll Staff authorization uses the shared config constant."""
     assert hasattr(config, "STAFF_ROLE_ID")
     assert scheduled_polls.STAFF_ROLE_ID == config.STAFF_ROLE_ID
-
-
-# ---------------------------------------------------------------------------
-# Tests for _normalize_weekday
-# ---------------------------------------------------------------------------
-
-def test_normalize_weekday_valid():
-    """Verify valid weekday names are normalized correctly."""
-    assert _normalize_weekday("mittwoch") == "Mittwoch"
-    assert _normalize_weekday("Montag") == "Montag"
-    assert _normalize_weekday("FREITAG") == "Freitag"
-
-def test_normalize_weekday_invalid():
-    """Verify invalid weekday names return None."""
-    assert _normalize_weekday("Wednesday") is None
-    assert _normalize_weekday("notaday") is None
-    assert _normalize_weekday("") is None
 
 
 # ---------------------------------------------------------------------------
