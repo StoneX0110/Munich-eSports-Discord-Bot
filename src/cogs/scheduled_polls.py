@@ -13,8 +13,8 @@ from discord.ext import commands, tasks
 from config import DEPARTMENT_HEAD_ROLE_ID, GUILD_ID, POLLS_FILE, STAFF_ROLE_ID
 from utils.scheduled import (
     BERLIN_TZ,
-    JsonScheduleStore,
     WEEKDAYS,
+    JsonScheduleStore,
     member_has_any_role,
     normalize_weekday,
     now_berlin_iso,
@@ -24,10 +24,7 @@ from utils.scheduled import (
 
 logger = logging.getLogger("munich_esports_bot.scheduled_polls")
 
-DEFAULT_POLLS_DATA = {
-    "next_scheduled_poll_id": 1,
-    "scheduled_polls": {}
-}
+DEFAULT_POLLS_DATA = {"next_scheduled_poll_id": 1, "scheduled_polls": {}}
 
 POLLS_FLUSH_INTERVAL_SECONDS = 60
 SCHEDULED_POLL_MANAGER_ROLE_IDS = {DEPARTMENT_HEAD_ROLE_ID, STAFF_ROLE_ID}
@@ -39,6 +36,7 @@ _polls_data_dirty = False
 # ---------------------------------------------------------------------------
 # Persistence helpers
 # ---------------------------------------------------------------------------
+
 
 def _default_polls_data() -> dict:
     return {
@@ -106,6 +104,7 @@ def _flush_polls_data(force: bool = False) -> bool:
 # Authorization & validation helpers
 # ---------------------------------------------------------------------------
 
+
 def _can_manage_scheduled_polls(member: discord.Member) -> bool:
     """Check whether a Discord member can manage scheduled polls."""
     return member_has_any_role(member, SCHEDULED_POLL_MANAGER_ROLE_IDS)
@@ -137,10 +136,7 @@ def _format_reminder_schedule(poll: dict) -> str:
 
 def _weekdays_from_start(week_start_day: str) -> list[str]:
     week_start_day_idx = WEEKDAYS.index(week_start_day)
-    return [
-        WEEKDAYS[(week_start_day_idx + i) % len(WEEKDAYS)]
-        for i in range(len(WEEKDAYS))
-    ]
+    return [WEEKDAYS[(week_start_day_idx + i) % len(WEEKDAYS)] for i in range(len(WEEKDAYS))]
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +294,7 @@ class ScheduledPollView(discord.ui.View):
 # The Cog
 # ---------------------------------------------------------------------------
 
+
 class ScheduledPollCog(commands.Cog):
     """Slash command group for managing recurring scheduled polls."""
 
@@ -442,17 +439,12 @@ class ScheduledPollCog(commands.Cog):
             )
             return
 
-        week_start_day = (
-            week_start_day.strip()
-            if week_start_day
-            else "Montag"
-        )
+        week_start_day = week_start_day.strip() if week_start_day else "Montag"
         normalized_week_start_day = _normalize_weekday(week_start_day)
         if normalized_week_start_day is None:
             valid_list = ", ".join(WEEKDAYS)
             await interaction.response.send_message(
-                "❌ Ungültiger erster Tag der Spielwoche: "
-                f"`{week_start_day}`. Gültige Werte: {valid_list}",
+                f"❌ Ungültiger erster Tag der Spielwoche: `{week_start_day}`. Gültige Werte: {valid_list}",
                 ephemeral=True,
             )
             return
@@ -473,8 +465,7 @@ class ScheduledPollCog(commands.Cog):
             if normalized_reminder_weekday is None:
                 valid_list = ", ".join(WEEKDAYS)
                 await interaction.response.send_message(
-                    "❌ Ungültiger Reminder-Wochentag: "
-                    f"`{reminder_weekday}`. Gültige Werte: {valid_list}",
+                    f"❌ Ungültiger Reminder-Wochentag: `{reminder_weekday}`. Gültige Werte: {valid_list}",
                     ephemeral=True,
                 )
                 return
@@ -534,19 +525,25 @@ class ScheduledPollCog(commands.Cog):
 
     @poll_create.autocomplete("posting_day")
     async def posting_day_autocomplete(
-        self, interaction: discord.Interaction, current: str,
+        self,
+        interaction: discord.Interaction,
+        current: str,
     ) -> list[app_commands.Choice[str]]:
         return weekday_choices(current)
 
     @poll_create.autocomplete("reminder_weekday")
     async def reminder_weekday_autocomplete(
-        self, interaction: discord.Interaction, current: str,
+        self,
+        interaction: discord.Interaction,
+        current: str,
     ) -> list[app_commands.Choice[str]]:
         return weekday_choices(current)
 
     @poll_create.autocomplete("week_start_day")
     async def week_start_day_autocomplete(
-        self, interaction: discord.Interaction, current: str,
+        self,
+        interaction: discord.Interaction,
+        current: str,
     ) -> list[app_commands.Choice[str]]:
         return weekday_choices(current)
 
@@ -557,9 +554,7 @@ class ScheduledPollCog(commands.Cog):
         async with _polls_data_lock:
             data = _get_polls_data()
             active_poll_ids = [
-                poll_id
-                for poll_id, poll in data.get("scheduled_polls", {}).items()
-                if poll.get("active_instance")
+                poll_id for poll_id, poll in data.get("scheduled_polls", {}).items() if poll.get("active_instance")
             ]
 
         for poll_id in active_poll_ids:
@@ -746,9 +741,7 @@ class ScheduledPollCog(commands.Cog):
                         instance["message_id"],
                     )
                 except discord.HTTPException:
-                    logger.exception(
-                        "Failed to send reminder for poll #%s.", current_poll_id
-                    )
+                    logger.exception("Failed to send reminder for poll #%s.", current_poll_id)
 
             if changed:
                 _flush_polls_data(force=True)
@@ -788,9 +781,7 @@ class ScheduledPollCog(commands.Cog):
             force=True,
         )
 
-        await interaction.followup.send(
-            f"✅ Trigger-Post für Umfrage #{poll_id} ausgeführt!"
-        )
+        await interaction.followup.send(f"✅ Trigger-Post für Umfrage #{poll_id} ausgeführt!")
 
     @poll_group.command(
         name="trigger-reminder",
@@ -833,9 +824,7 @@ class ScheduledPollCog(commands.Cog):
             return
 
         if instance_missing:
-            await interaction.followup.send(
-                "❌ Diese Umfrage hat aktuell keine aktive Nachricht."
-            )
+            await interaction.followup.send("❌ Diese Umfrage hat aktuell keine aktive Nachricht.")
             return
 
         now = datetime.now(BERLIN_TZ)
@@ -846,14 +835,13 @@ class ScheduledPollCog(commands.Cog):
             force=True,
         )
 
-        await interaction.followup.send(
-            f"✅ Trigger-Reminder für Umfrage #{poll_id} ausgeführt!"
-        )
+        await interaction.followup.send(f"✅ Trigger-Reminder für Umfrage #{poll_id} ausgeführt!")
 
 
 # ---------------------------------------------------------------------------
 # Extension setup
 # ---------------------------------------------------------------------------
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(ScheduledPollCog(bot))

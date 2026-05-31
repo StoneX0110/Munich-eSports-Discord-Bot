@@ -27,9 +27,9 @@ EV_API_KEY = os.getenv("EV_API_KEY", "")
 # ---------------------------------------------------------------------------
 GUILD_ID = 615552039027736595
 MEMBERSHIP_ROLE_ID = 615555478210215936
-GENERAL_CHANNEL_ID = 626072050989006859       # #general – birthdays & welcomes
-MEMBER_CHANNEL_ID = 615563862426648580        # #member-general – anniversaries
-HONEYPOT_CHANNEL_ID = 1504391371719446540     # spam trap – any post here triggers ban
+GENERAL_CHANNEL_ID = 626072050989006859  # #general – birthdays & welcomes
+MEMBER_CHANNEL_ID = 615563862426648580  # #member-general – anniversaries
+HONEYPOT_CHANNEL_ID = 1504391371719446540  # spam trap – any post here triggers ban
 HONEYPOT_SPARE_AFTER_DAYS = 30
 MOD_CHANNEL_ID = 615559692101353513  # moderation channel
 DEPARTMENT_HEAD_ROLE_ID = 748509968172449802  # "Abteilungsleiter"
@@ -47,9 +47,9 @@ DEPARTMENT_ROLES = {
 # ---------------------------------------------------------------------------
 # easyVerein custom field IDs
 # ---------------------------------------------------------------------------
-DISCORD_ID_FIELD_ID = 34867055        # "Discord-ID" – stores Discord user ID or tag
+DISCORD_ID_FIELD_ID = 34867055  # "Discord-ID" – stores Discord user ID or tag
 BIRTHDAY_CONSENT_FIELD_ID = 177910549  # "Zustimmung Geburtstagswünsche" – checkbox
-ABTEILUNGEN_FIELD_ID = 34866629       # "Abteilungen" – multi-select department membership
+ABTEILUNGEN_FIELD_ID = 34866629  # "Abteilungen" – multi-select department membership
 
 # ---------------------------------------------------------------------------
 # Paths

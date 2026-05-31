@@ -15,7 +15,6 @@ from easyverein.models.member import MemberFilter
 from config import (
     ABTEILUNGEN_FIELD_ID,
     DEPARTMENT_ROLES,
-    DAILY_RUN_TIME,
     GUILD_ID,
 )
 
@@ -46,11 +45,11 @@ class DepartmentCog(commands.Cog):
             if role.id in DEPARTMENT_ROLES:
                 dept_name = DEPARTMENT_ROLES[role.id]
                 break
-                
+
         if not dept_name:
             await interaction.response.send_message(
                 "❌ Du scheinst keine Abteilungsleitung zu sein, oder deine Rolle wurde nicht konfiguriert.",
-                ephemeral=True
+                ephemeral=True,
             )
             return
 
@@ -65,12 +64,16 @@ class DepartmentCog(commands.Cog):
         try:
             search_indefinite = MemberFilter(resignationDate__isnull=True, isApplication=False)
             members_indefinite = await asyncio.to_thread(
-                self.ev_client.member.get_all, query=query, search=search_indefinite,
+                self.ev_client.member.get_all,
+                query=query,
+                search=search_indefinite,
             )
 
             search_future_resignation = MemberFilter(resignationDate__gte=today, isApplication=False)
             members_resigning = await asyncio.to_thread(
-                self.ev_client.member.get_all, query=query, search=search_future_resignation,
+                self.ev_client.member.get_all,
+                query=query,
+                search=search_future_resignation,
             )
 
             # Deduplicate by ID
@@ -93,7 +96,10 @@ class DepartmentCog(commands.Cog):
                     continue
                 for cf in member.customFields:
                     # Depending on how the API model parses it, the ID is within the nested customField object
-                    if getattr(cf.customField, "id", None) == ABTEILUNGEN_FIELD_ID or getattr(cf, "customField", None) == ABTEILUNGEN_FIELD_ID:
+                    if (
+                        getattr(cf.customField, "id", None) == ABTEILUNGEN_FIELD_ID
+                        or getattr(cf, "customField", None) == ABTEILUNGEN_FIELD_ID
+                    ):
                         if getattr(cf, "selectedOptions", None):
                             for opt in cf.selectedOptions:
                                 if getattr(opt, "value", None) == dept_name:
@@ -101,7 +107,9 @@ class DepartmentCog(commands.Cog):
                                     break
                         break
 
-            await interaction.followup.send(f"Die Abteilung **{dept_name}** hat aktuell **{count}** aktive Mitglieder.", ephemeral=True)
+            await interaction.followup.send(
+                f"Die Abteilung **{dept_name}** hat aktuell **{count}** aktive Mitglieder.", ephemeral=True
+            )
 
 
 async def setup(bot: commands.Bot) -> None:

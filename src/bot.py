@@ -15,7 +15,7 @@ from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 
 import discord
 from discord.ext import commands, tasks
-from dotenv import set_key, find_dotenv
+from dotenv import find_dotenv, set_key
 from easyverein import BearerToken, EasyvereinAPI
 from easyverein.models import CustomField, Member
 from easyverein.models.member import MemberFilter
@@ -35,8 +35,8 @@ from config import (
 )
 from messages import (
     ANNIVERSARY_MESSAGES_1Y,
-    ANNIVERSARY_MESSAGES_NY,
     ANNIVERSARY_MESSAGES_MULTIPLE,
+    ANNIVERSARY_MESSAGES_NY,
     BIRTHDAY_MESSAGES,
     BIRTHDAY_MESSAGES_MULTIPLE,
     WELCOME_MESSAGES,
@@ -54,14 +54,17 @@ _LOG_DIR.mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
 _formatter = logging.Formatter(_LOG_FORMAT)
 
+
 # 1. Main Bot & Everything Else Logger (Daily rotation)
 class _BotLogFilter(logging.Filter):
     def filter(self, record):
         # Exclude voting and department logs from bot.log
-        if record.name.startswith("munich_esports_bot.voting") or \
-           record.name.startswith("munich_esports_bot.department"):
+        if record.name.startswith("munich_esports_bot.voting") or record.name.startswith(
+            "munich_esports_bot.department"
+        ):
             return False
         return True
+
 
 _bot_handler = TimedRotatingFileHandler(
     _LOG_DIR / "bot.log",
@@ -136,6 +139,7 @@ bot.ev_client = ev_client
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _load_known_members() -> set[int] | None:
     """Load the set of known easyVerein member IDs from disk.
 
@@ -154,9 +158,7 @@ def _load_known_members() -> set[int] | None:
 def _save_known_members(ids: set[int]) -> None:
     """Persist the set of known easyVerein member IDs to disk."""
     try:
-        KNOWN_MEMBERS_FILE.write_text(
-            json.dumps(sorted(ids)), encoding="utf-8"
-        )
+        KNOWN_MEMBERS_FILE.write_text(json.dumps(sorted(ids)), encoding="utf-8")
     except Exception:
         logger.exception("Failed to save %s.", KNOWN_MEMBERS_FILE)
 
@@ -216,9 +218,11 @@ async def _update_ev_discord_id(ev_member: Member, discord_user_id: str) -> None
     Update the Discord-ID custom field in easyVerein with the numeric user ID.
     """
     try:
+
         def _do_update():
             member_cf = ev_client.member.custom_field(ev_member.id)
             member_cf.ensure_set(DISCORD_ID_FIELD_ID, discord_user_id)
+
         await asyncio.to_thread(_do_update)
         logger.info(
             "Updated easyVerein Discord-ID for member %s to %s",
@@ -262,10 +266,7 @@ async def daily_task():
     # ------------------------------------------------------------------
     # Fetch all active members from easyVerein
     # ------------------------------------------------------------------
-    query = (
-        "{id,joinDate,resignationDate,contactDetails{dateOfBirth},"
-        "customFields{customField{id,name},value}}"
-    )
+    query = "{id,joinDate,resignationDate,contactDetails{dateOfBirth},customFields{customField{id,name},value}}"
     today = datetime.now(DAILY_RUN_TIME.tzinfo).date()
 
     try:
@@ -281,7 +282,9 @@ async def daily_task():
             resignationDate__gte=today,
             isApplication=False,
         )
-        members_resigning = await asyncio.to_thread(ev_client.member.get_all, query=query, search=search_future_resignation)
+        members_resigning = await asyncio.to_thread(
+            ev_client.member.get_all, query=query, search=search_future_resignation
+        )
 
         # Combine both lists (using a dict by ID to deduplicate just in case)
         ev_members_map = {m.id: m for m in members_indefinite + members_resigning}
@@ -394,7 +397,7 @@ async def daily_task():
             member = guild.get_member(uid)
             if member:
                 birthday_members.append(member)
-        
+
         if birthday_members:
             if len(birthday_members) == 1:
                 message = random.choice(BIRTHDAY_MESSAGES).format(mention=birthday_members[0].mention)
@@ -403,7 +406,11 @@ async def daily_task():
                 message = random.choice(BIRTHDAY_MESSAGES_MULTIPLE).format(members=members_list)
 
             if dry_run:
-                logger.info("DRY RUN: Would send birthday greeting(s) for %d member(s). Message:\n%s", len(birthday_members), message)
+                logger.info(
+                    "DRY RUN: Would send birthday greeting(s) for %d member(s). Message:\n%s",
+                    len(birthday_members),
+                    message,
+                )
             else:
                 try:
                     await general_channel.send(message)
@@ -446,7 +453,11 @@ async def daily_task():
                     message = random.choice(WELCOME_MESSAGES_MULTIPLE).format(members=members_list)
 
                 if dry_run:
-                    logger.info("DRY RUN: Would send welcome message(s) for %d member(s). Message:\n%s", len(new_discord_members), message)
+                    logger.info(
+                        "DRY RUN: Would send welcome message(s) for %d member(s). Message:\n%s",
+                        len(new_discord_members),
+                        message,
+                    )
                 else:
                     try:
                         await general_channel.send(message)
@@ -477,7 +488,7 @@ async def daily_task():
 
         if anniversaries_by_year:
             total_anniversaries = sum(len(m) for m in anniversaries_by_year.values())
-            
+
             if total_anniversaries == 1:
                 years = next(iter(anniversaries_by_year.keys()))
                 discord_member = anniversaries_by_year[years][0]
@@ -492,12 +503,16 @@ async def daily_task():
                         anniversary_lines.append(f"- 1 Jahr: {mentions_str}")
                     else:
                         anniversary_lines.append(f"- {years} Jahre: {mentions_str}")
-                
+
                 members_list = "\n".join(anniversary_lines)
                 message = random.choice(ANNIVERSARY_MESSAGES_MULTIPLE).format(members=members_list)
 
             if dry_run:
-                logger.info("DRY RUN: Would send anniversary message(s) for %d member(s). Message:\n%s", total_anniversaries, message)
+                logger.info(
+                    "DRY RUN: Would send anniversary message(s) for %d member(s). Message:\n%s",
+                    total_anniversaries,
+                    message,
+                )
             else:
                 try:
                     await member_channel.send(message)
@@ -525,6 +540,7 @@ async def _setup_hook():
     logger.info("Scheduled reminders cog loaded.")
     await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
     logger.info("Slash commands synced.")
+
 
 bot.setup_hook = _setup_hook
 

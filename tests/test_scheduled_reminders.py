@@ -586,9 +586,7 @@ def test_trigger_send_sends_selected_reminder_immediately():
         _, kwargs = send_mock.call_args
         assert kwargs["reminder_id"] == "1"
         assert kwargs["force"] is True
-        interaction.followup.send.assert_called_once_with(
-            "✅ Trigger-Send für Reminder #1 ausgeführt!"
-        )
+        interaction.followup.send.assert_called_once_with("✅ Trigger-Send für Reminder #1 ausgeführt!")
 
     asyncio.run(run())
 

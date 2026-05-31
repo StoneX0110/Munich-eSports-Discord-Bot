@@ -40,6 +40,7 @@ _active_voters: dict[str, set[str]] = {}  # vote_id → set of user_ids with ope
 # Persistence helpers
 # ---------------------------------------------------------------------------
 
+
 def _load_data() -> dict:
     """Load the votes/sessions data from disk."""
     if not VOTES_FILE.exists():
@@ -72,6 +73,7 @@ def _save_data(data: dict) -> None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _is_department_head(member: discord.Member) -> bool:
     """Check whether a Discord member has the department head role."""
@@ -125,7 +127,8 @@ async def _update_vote_embed(bot: commands.Bot, vote: dict) -> None:
             return
 
         embed.description = counter_pattern.sub(
-            f"🗳️ **Abgegebene Stimmen:** {total}", embed.description,
+            f"🗳️ **Abgegebene Stimmen:** {total}",
+            embed.description,
         )
         await msg.edit(embed=embed)
     except Exception:
@@ -140,6 +143,7 @@ async def _get_vote(
 
     Sends an ephemeral error to *interaction* and returns None on failure.
     """
+
     async def _send_error(msg: str) -> None:
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
@@ -159,7 +163,8 @@ async def _get_vote(
 
 
 async def _get_active_session(
-    session_id: int, interaction: discord.Interaction,
+    session_id: int,
+    interaction: discord.Interaction,
 ) -> tuple[dict, dict, str] | None:
     """Load data and return (data, session, sid) if the session exists and is active.
 
@@ -181,8 +186,12 @@ async def _get_active_session(
 # Vote recording helper
 # ---------------------------------------------------------------------------
 
+
 async def _record_votes(
-    vote_id: str, option: str, count: int, interaction: discord.Interaction,
+    vote_id: str,
+    option: str,
+    count: int,
+    interaction: discord.Interaction,
 ) -> bool:
     """Record *count* votes for *option* and send a confirmation message.
 
@@ -229,15 +238,9 @@ async def _record_votes(
 
     # Send confirmation (outside lock)
     if new_remaining > 0:
-        msg = (
-            f"✅ **{count}** Stimme(n) für **{option}** abgegeben! "
-            f"Du hast noch **{new_remaining}** Stimme(n) übrig."
-        )
+        msg = f"✅ **{count}** Stimme(n) für **{option}** abgegeben! Du hast noch **{new_remaining}** Stimme(n) übrig."
     else:
-        msg = (
-            f"✅ **{count}** Stimme(n) für **{option}** abgegeben! "
-            f"Du hast alle deine Stimmen abgegeben. Danke!"
-        )
+        msg = f"✅ **{count}** Stimme(n) für **{option}** abgegeben! Du hast alle deine Stimmen abgegeben. Danke!"
 
     if interaction.response.is_done():
         await interaction.followup.send(msg, ephemeral=True)
@@ -253,6 +256,7 @@ async def _record_votes(
 # ---------------------------------------------------------------------------
 # Persistent vote button view
 # ---------------------------------------------------------------------------
+
 
 class VoteView(discord.ui.View):
     """Persistent view attached to vote embeds with the 'Abstimmen' button."""
@@ -308,14 +312,13 @@ class VoteView(discord.ui.View):
                     isApplication=False,
                 )
                 members = await asyncio.to_thread(
-                    ev_client.member.get_all, query=query, search=search,
+                    ev_client.member.get_all,
+                    query=query,
+                    search=search,
                 )
 
                 # Filter to active members only
-                members = [
-                    m for m in members
-                    if m.resignationDate is None or m.resignationDate >= today
-                ]
+                members = [m for m in members if m.resignationDate is None or m.resignationDate >= today]
 
                 for m in members:
                     if not m.customFields:
@@ -380,10 +383,7 @@ class VoteSelectView(discord.ui.View):
 
         self.option_select = discord.ui.Select(
             placeholder="Wähle eine Option...",
-            options=[
-                discord.SelectOption(label=opt, value=str(i))
-                for i, opt in enumerate(options)
-            ],
+            options=[discord.SelectOption(label=opt, value=str(i)) for i, opt in enumerate(options)],
             custom_id=f"vote_select_{vote_id}_{user_id}",
         )
         self.options_list = options
@@ -416,10 +416,7 @@ class VoteSelectView(discord.ui.View):
             max_count = min(self.remaining, 25)
             count_select = discord.ui.Select(
                 placeholder=f"Anzahl Stimmen für {self.selected_option}...",
-                options=[
-                    discord.SelectOption(label=str(i), value=str(i))
-                    for i in range(1, max_count + 1)
-                ],
+                options=[discord.SelectOption(label=str(i), value=str(i)) for i in range(1, max_count + 1)],
                 custom_id=f"vote_count_{self.vote_id}_{self.user_id}",
             )
             count_select.callback = self.on_count_select
@@ -451,6 +448,7 @@ class VoteSelectView(discord.ui.View):
 # The Cog
 # ---------------------------------------------------------------------------
 
+
 class VotingCog(commands.Cog):
     """Slash command group for department election voting."""
 
@@ -466,16 +464,12 @@ class VotingCog(commands.Cog):
             sub = ev_client.custom_field.select_option(ABTEILUNGEN_FIELD_ID)
             options = await asyncio.to_thread(sub.get_all)
             for opt in options:
-                self.department_choices.append(
-                    app_commands.Choice(name=opt.value, value=opt.value)
-                )
+                self.department_choices.append(app_commands.Choice(name=opt.value, value=opt.value))
         except Exception:
             logger.exception("Failed to fetch department choices from easyVerein.")
 
         if not self.department_choices:
-            logger.warning(
-                "No department choices loaded – /vote session will have no autocomplete."
-            )
+            logger.warning("No department choices loaded – /vote session will have no autocomplete.")
         else:
             logger.info(
                 "Loaded %d department choices: %s",
@@ -583,9 +577,7 @@ class VotingCog(commands.Cog):
             return
 
         if count < 0:
-            await interaction.response.send_message(
-                "❌ Anzahl muss 0 oder größer sein.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ Anzahl muss 0 oder größer sein.", ephemeral=True)
             return
 
         async with _data_lock:
@@ -640,15 +632,11 @@ class VotingCog(commands.Cog):
             return
 
         if len(option_list) > 25:
-            await interaction.response.send_message(
-                "❌ Maximal 25 Optionen erlaubt.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ Maximal 25 Optionen erlaubt.", ephemeral=True)
             return
 
         if len(option_list) != len(set(option_list)):
-            await interaction.response.send_message(
-                "❌ Optionen dürfen nicht doppelt vorkommen.", ephemeral=True
-            )
+            await interaction.response.send_message("❌ Optionen dürfen nicht doppelt vorkommen.", ephemeral=True)
             return
 
         async with _data_lock:
@@ -682,9 +670,7 @@ class VotingCog(commands.Cog):
                 f"**Abteilung:** {session['department']}\n"
                 f"**Sitzung:** #{sid}\n"
                 f"**Status:** 🟢 Offen\n\n"
-                f"**Optionen:**\n"
-                + "\n".join(f"• {opt}" for opt in option_list)
-                + f"\n\n🗳️ **Abgegebene Stimmen:** 0"
+                f"**Optionen:**\n" + "\n".join(f"• {opt}" for opt in option_list) + "\n\n🗳️ **Abgegebene Stimmen:** 0"
             ),
             color=discord.Color.blue(),
             timestamp=datetime.now(ZoneInfo("Europe/Berlin")),
@@ -708,7 +694,10 @@ class VotingCog(commands.Cog):
 
         logger.info(
             "Vote #%s created in session #%s by %s: %s",
-            vote_id, sid, interaction.user, title,
+            vote_id,
+            sid,
+            interaction.user,
+            title,
         )
 
     # -----------------------------------------------------------------------
@@ -795,14 +784,12 @@ class VotingCog(commands.Cog):
 
             # Check for open votes – refuse if any remain
             open_votes = [
-                vid for vid, v in data["votes"].items()
-                if str(v.get("session_id")) == sid and v.get("active")
+                vid for vid, v in data["votes"].items() if str(v.get("session_id")) == sid and v.get("active")
             ]
             if open_votes:
                 votes_str = ", ".join(f"#{v}" for v in open_votes)
                 await interaction.response.send_message(
-                    f"❌ Es gibt noch offene Abstimmungen: {votes_str}\n"
-                    f"Bitte schließe diese zuerst mit `/vote close`.",
+                    f"❌ Es gibt noch offene Abstimmungen: {votes_str}\nBitte schließe diese zuerst mit `/vote close`.",
                     ephemeral=True,
                 )
                 return
@@ -811,9 +798,7 @@ class VotingCog(commands.Cog):
             session["active"] = False
             _save_data(data)
 
-        await interaction.response.send_message(
-            f"✅ Wahlsitzung #{session_id} beendet."
-        )
+        await interaction.response.send_message(f"✅ Wahlsitzung #{session_id} beendet.")
 
         logger.info("Session #%s ended by %s.", sid, interaction.user)
 
@@ -821,6 +806,7 @@ class VotingCog(commands.Cog):
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VotingCog(bot))
