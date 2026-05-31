@@ -8,19 +8,24 @@ from datetime import datetime, timedelta, timezone
 import discord
 from discord.ext import commands
 
-from config import GUILD_ID, HONEYPOT_CHANNEL_ID, MOD_CHANNEL_ID, HONEYPOT_SPARE_AFTER_DAYS
+from config import (
+    GUILD_ID,
+    HONEYPOT_CHANNEL_ID,
+    HONEYPOT_SPARE_AFTER_DAYS,
+    MOD_CHANNEL_ID,
+)
 
 logger = logging.getLogger("munich_esports_bot.honeypot")
 
 
 async def _notify_mod_channel(
-        mod_channel: discord.abc.Messageable,
-        message: discord.Message,
+    mod_channel: discord.abc.Messageable,
+    message: discord.Message,
 ) -> None:
     if message.is_forwardable():
         try:
             await message.forward(mod_channel)
-            await mod_channel.send(f"🔨 BANNED")
+            await mod_channel.send("🔨 BANNED")
             return
         except discord.HTTPException:
             logger.exception("Forward to mod channel failed; sending fallback.")
@@ -42,19 +47,18 @@ class HoneypotCog(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         guild = message.guild
         if (
-                message.author.id == self.bot.user.id
-                or message.webhook_id is not None
-                or guild is None
-                or guild.id != GUILD_ID
-                or message.channel.id != HONEYPOT_CHANNEL_ID
+            message.author.id == self.bot.user.id
+            or message.webhook_id is not None
+            or guild is None
+            or guild.id != GUILD_ID
+            or message.channel.id != HONEYPOT_CHANNEL_ID
         ):
             return
 
         mod_channel = guild.get_channel(MOD_CHANNEL_ID)
         if mod_channel is None or not isinstance(mod_channel, discord.abc.Messageable):
             logger.error(
-                "Honeypot mod log channel %s missing or not messageable; "
-                "skipping ban for user %s.",
+                "Honeypot mod log channel %s missing or not messageable; skipping ban for user %s.",
                 MOD_CHANNEL_ID,
                 message.author.id,
             )
@@ -66,7 +70,7 @@ class HoneypotCog(commands.Cog):
 
         joined_at = member.joined_at
         if joined_at is not None and (
-                datetime.now(timezone.utc) - joined_at > timedelta(days=HONEYPOT_SPARE_AFTER_DAYS)
+            datetime.now(timezone.utc) - joined_at > timedelta(days=HONEYPOT_SPARE_AFTER_DAYS)
         ):
             try:
                 await message.channel.set_permissions(
@@ -75,22 +79,18 @@ class HoneypotCog(commands.Cog):
                     reason="Honeypot channel post (member joined over 1 month ago)",
                 )
                 logger.info(
-                    "Removed honeypot view permission for %s (%s); "
-                    "joined %s, not banning.",
+                    "Removed honeypot view permission for %s (%s); joined %s, not banning.",
                     member,
                     member.id,
                     joined_at,
                 )
             except discord.Forbidden:
                 logger.exception(
-                    "Missing permissions to update honeypot channel overwrite "
-                    "for %s.",
+                    "Missing permissions to update honeypot channel overwrite for %s.",
                     member.id,
                 )
             except discord.HTTPException:
-                logger.exception(
-                    "Failed to update honeypot channel overwrite for %s.", member.id
-                )
+                logger.exception("Failed to update honeypot channel overwrite for %s.", member.id)
             return
 
         try:
@@ -103,15 +103,9 @@ class HoneypotCog(commands.Cog):
                 reason="Honeypot channel post",
                 delete_message_days=1,
             )
-            logger.info(
-                "Banned %s (%s) for honeypot post.",
-                member,
-                member.id
-            )
+            logger.info("Banned %s (%s) for honeypot post.", member, member.id)
         except discord.Forbidden:
-            logger.exception(
-                "Missing permissions to ban %s for honeypot post.", member.id
-            )
+            logger.exception("Missing permissions to ban %s for honeypot post.", member.id)
         except discord.HTTPException:
             logger.exception("Ban failed for honeypot user %s.", member.id)
 
