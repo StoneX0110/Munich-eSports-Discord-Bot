@@ -3,7 +3,6 @@ Honeypot channel: ban anyone who posts in the trap channel and log to mod channe
 """
 
 import logging
-from datetime import datetime
 
 import discord
 from discord.ext import commands
@@ -20,7 +19,7 @@ async def _notify_mod_channel(
     if message.is_forwardable():
         try:
             await message.forward(mod_channel)
-            await mod_channel.send(f"🔨 BANNED")
+            await mod_channel.send("🔨 BANNED")
             return
         except discord.HTTPException:
             logger.exception("Forward to mod channel failed; sending fallback.")
@@ -53,8 +52,7 @@ class HoneypotCog(commands.Cog):
         mod_channel = guild.get_channel(MOD_CHANNEL_ID)
         if mod_channel is None or not isinstance(mod_channel, discord.abc.Messageable):
             logger.error(
-                "Honeypot mod log channel %s missing or not messageable; "
-                "skipping ban for user %s.",
+                "Honeypot mod log channel %s missing or not messageable; skipping ban for user %s.",
                 MOD_CHANNEL_ID,
                 message.author.id,
             )
@@ -72,15 +70,9 @@ class HoneypotCog(commands.Cog):
                 reason="Honeypot channel post",
                 delete_message_days=1,
             )
-            logger.info(
-                "Banned %s (%s) for honeypot post.",
-                member,
-                member.id
-            )
+            logger.info("Banned %s (%s) for honeypot post.", member, member.id)
         except discord.Forbidden:
-            logger.exception(
-                "Missing permissions to ban %s for honeypot post.", member.id
-            )
+            logger.exception("Missing permissions to ban %s for honeypot post.", member.id)
         except discord.HTTPException:
             logger.exception("Ban failed for honeypot user %s.", member.id)
 
