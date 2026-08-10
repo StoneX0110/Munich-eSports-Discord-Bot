@@ -10,13 +10,13 @@ from zoneinfo import ZoneInfo
 import discord
 from discord import app_commands
 from discord.ext import commands
-from easyverein.models.member import MemberFilter
 
 from config import (
     ABTEILUNGEN_FIELD_ID,
     DEPARTMENT_ROLES,
     GUILD_ID,
 )
+from utils.easyverein import MemberDateFilter
 
 logger = logging.getLogger("munich_esports_bot.department")
 
@@ -62,14 +62,14 @@ class DepartmentCog(commands.Cog):
         today = datetime.now(ZoneInfo("Europe/Berlin")).date()
 
         try:
-            search_indefinite = MemberFilter(resignationDate__isnull=True, isApplication=False)
+            search_indefinite = MemberDateFilter(resignationDate__isnull=True, isApplication=False)
             members_indefinite = await asyncio.to_thread(
                 self.ev_client.member.get_all,
                 query=query,
                 search=search_indefinite,
             )
 
-            search_future_resignation = MemberFilter(resignationDate__gte=today, isApplication=False)
+            search_future_resignation = MemberDateFilter(resignationDate__gte=today, isApplication=False)
             members_resigning = await asyncio.to_thread(
                 self.ev_client.member.get_all,
                 query=query,

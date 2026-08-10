@@ -18,7 +18,6 @@ from discord.ext import commands, tasks
 from dotenv import find_dotenv, set_key
 from easyverein import BearerToken, EasyvereinAPI
 from easyverein.models import CustomField, Member
-from easyverein.models.member import MemberFilter
 
 from config import (
     BIRTHDAY_CONSENT_FIELD_ID,
@@ -42,6 +41,7 @@ from messages import (
     WELCOME_MESSAGES,
     WELCOME_MESSAGES_MULTIPLE,
 )
+from utils.easyverein import MemberDateFilter
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -271,14 +271,14 @@ async def daily_task():
 
     try:
         # 1. Members with NO resignation date (indefinite membership)
-        search_indefinite = MemberFilter(
+        search_indefinite = MemberDateFilter(
             resignationDate__isnull=True,
             isApplication=False,
         )
         members_indefinite = await asyncio.to_thread(ev_client.member.get_all, query=query, search=search_indefinite)
 
         # 2. Members with FUTURE resignation date (still active until that date)
-        search_future_resignation = MemberFilter(
+        search_future_resignation = MemberDateFilter(
             resignationDate__gte=today,
             isApplication=False,
         )
