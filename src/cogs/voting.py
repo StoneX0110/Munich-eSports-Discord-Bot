@@ -26,6 +26,7 @@ from config import (
     MEMBERSHIP_ROLE_ID,
     VOTES_FILE,
 )
+from utils.easyverein import is_active_on
 
 logger = logging.getLogger("munich_esports_bot.voting")
 
@@ -318,7 +319,7 @@ class VoteView(discord.ui.View):
                 )
 
                 # Filter to active members only
-                members = [m for m in members if m.resignationDate is None or m.resignationDate >= today]
+                members = [m for m in members if is_active_on(m.resignationDate, today)]
 
                 for m in members:
                     if not m.customFields:
