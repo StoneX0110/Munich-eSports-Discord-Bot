@@ -14,10 +14,31 @@ import config
 from cogs import scheduled_reminders
 from cogs.scheduled_reminders import (
     ScheduledReminderCog,
+    _build_reminder_list_embeds,
     _load_reminders_data,
     _save_reminders_data,
     setup,
 )
+
+
+def test_reminder_list_paginates_at_discord_field_limit():
+    reminders = {str(i): _base_reminder(message="x" * 160) for i in range(30)}
+    embeds = _build_reminder_list_embeds(reminders)
+    assert len(embeds) >= 2
+    assert all(len(embed.fields) <= 25 for embed in embeds)
+    assert all(len(embed) <= 6000 for embed in embeds)
+
+
+def test_reminder_dry_run_suppresses_send():
+    async def run():
+        bot = MagicMock()
+        bot.dry_run = True
+        cog = ScheduledReminderCog(bot)
+        with patch("cogs.scheduled_reminders._load_reminders_data") as load:
+            assert await cog._handle_sending(date(2026, 5, 27), 18) is False
+        load.assert_not_called()
+        bot.get_channel.assert_not_called()
+    asyncio.run(run())
 
 
 def test_reminders_data_wrappers_delegate_to_configured_store():
@@ -623,3 +644,23 @@ def test_setup_registers_cog():
 def test_bot_loads_scheduled_reminders_extension():
     bot_source = Path("src/bot.py").read_text(encoding="utf-8")
     assert 'bot.load_extension("cogs.scheduled_reminders")' in bot_source
+
+
+def test_reminder_list_sends_large_pages_as_separate_messages():
+    async def run():
+        interaction = _department_head_interaction()
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        data = {'scheduled_reminders': {
+            str(i): _base_reminder(message='x' * 160) for i in range(50)
+        }}
+        with patch.object(scheduled_reminders, '_load_reminders_data', return_value=data):
+            cog = ScheduledReminderCog(MagicMock())
+            await cog.reminder_list.callback(cog, interaction)
+        interaction.response.defer.assert_awaited_once()
+        pages = [c.kwargs['embed'] for c in interaction.followup.send.await_args_list]
+        assert len(pages) > 1
+        assert all(len(page) <= 6000 and len(page.fields) <= 25 for page in pages)
+        assert sum(len(page.fields) for page in pages) == 50
+
+    asyncio.run(run())

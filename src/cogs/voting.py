@@ -27,6 +27,7 @@ from config import (
     VOTES_FILE,
 )
 from utils.easyverein import is_active_on
+from utils.persistence import atomic_write_json
 
 logger = logging.getLogger("munich_esports_bot.voting")
 
@@ -34,7 +35,14 @@ GUILD_OBJ = discord.Object(id=GUILD_ID)
 
 # Concurrency guards
 _data_lock = asyncio.Lock()
-_active_voters: dict[str, set[str]] = {}  # vote_id → set of user_ids with open dialogs
+_active_voters: dict[str, dict[str, object]] = {}  # vote_id → user_id → dialog token
+_display_tasks: dict[tuple[int, str], asyncio.Task] = {}
+_display_pending: set[tuple[int, str]] = set()
+_display_locks: dict[tuple[int, str], asyncio.Lock] = {}
+
+
+class VotingDataError(RuntimeError):
+    """Raised when election state cannot safely be loaded or persisted."""
 
 
 # ---------------------------------------------------------------------------
@@ -52,23 +60,24 @@ def _load_data() -> dict:
             "votes": {},
         }
     try:
-        return json.loads(VOTES_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        logger.exception("Failed to load %s – starting fresh.", VOTES_FILE)
-        return {
-            "next_session_id": 1,
-            "next_vote_id": 1,
-            "sessions": {},
-            "votes": {},
-        }
+        data = json.loads(VOTES_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("sessions"), dict) or not isinstance(
+            data.get("votes"), dict
+        ):
+            raise ValueError("invalid election data structure")
+        return data
+    except Exception as exc:
+        logger.exception("Failed to load %s; refusing to replace existing election data.", VOTES_FILE)
+        raise VotingDataError(f"failed to load {VOTES_FILE}") from exc
 
 
 def _save_data(data: dict) -> None:
     """Persist the votes/sessions data to disk."""
     try:
-        VOTES_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    except Exception:
+        atomic_write_json(VOTES_FILE, data)
+    except Exception as exc:
         logger.exception("Failed to save %s.", VOTES_FILE)
+        raise VotingDataError(f"failed to save {VOTES_FILE}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -107,9 +116,18 @@ def _build_result_bar(count: int, total: int, bar_length: int = 10) -> str:
     return f"{bar} {count} ({pct:.1f}%)"
 
 
-async def _update_vote_embed(bot: commands.Bot, vote: dict) -> None:
-    """Update the original vote embed to reflect the current total vote count."""
-    try:
+async def _refresh_vote_embed(bot: commands.Bot, vote_id: str) -> None:
+    """Render the latest durable vote state, serialized per Discord message."""
+    key = (id(bot), vote_id)
+    async with _display_locks.setdefault(key, asyncio.Lock()):
+        try:
+            data = _load_data()
+        except VotingDataError:
+            logger.error("Election state is unreadable; vote display refresh skipped.")
+            return
+        vote = data.get("votes", {}).get(vote_id)
+        if not vote:
+            return
         channel = bot.get_channel(vote["channel_id"])
         if not channel or not vote.get("message_id"):
             return
@@ -117,21 +135,41 @@ async def _update_vote_embed(bot: commands.Bot, vote: dict) -> None:
         if not msg.embeds:
             return
         embed = msg.embeds[0]
-
         total = sum(vote["tallies"].values())
-
-        # Only update if the new total exceeds the currently displayed one
-        # to avoid stale overwrites from concurrent voters
-        counter_pattern = re.compile(r"🗳️ \*\*Abgegebene Stimmen:\*\* (\d+)")
-        match = counter_pattern.search(embed.description)
-        if match and int(match.group(1)) >= total:
-            return
-
+        counter_pattern = re.compile(r"🗳️ \*\*Abgegebene Stimmen:\*\* \d+")
         embed.description = counter_pattern.sub(
-            f"🗳️ **Abgegebene Stimmen:** {total}",
-            embed.description,
+            f"🗳️ **Abgegebene Stimmen:** {total}", embed.description
         )
-        await msg.edit(embed=embed)
+        view = discord.utils.MISSING
+        if not vote.get("active"):
+            embed.description = embed.description.replace(
+                "**Status:** 🟢 Offen", "**Status:** 🔴 Geschlossen"
+            )
+            embed.color = discord.Color.red()
+            view = None
+        await msg.edit(embed=embed, view=view)
+
+
+async def _update_vote_embed(bot: commands.Bot, vote_id: str) -> None:
+    """Coalesce concurrent counter updates and render only durable state."""
+    key = (id(bot), vote_id)
+    _display_pending.add(key)
+    task = _display_tasks.get(key)
+    if task is None or task.done():
+        async def worker():
+            await asyncio.sleep(0.02)
+            try:
+                while key in _display_pending:
+                    _display_pending.discard(key)
+                    await _refresh_vote_embed(bot, vote_id)
+            finally:
+                _display_pending.discard(key)
+                _display_tasks.pop(key, None)
+
+        task = asyncio.create_task(worker())
+        _display_tasks[key] = task
+    try:
+        await asyncio.shield(task)
     except Exception:
         logger.exception("Failed to update vote embed with live counter.")
 
@@ -151,7 +189,11 @@ async def _get_vote(
         else:
             await interaction.response.send_message(msg, ephemeral=True)
 
-    data = _load_data()
+    try:
+        data = _load_data()
+    except VotingDataError:
+        await _send_error("❌ Die Abstimmungsdaten können gerade nicht sicher gelesen werden. Bitte versuche es später erneut.")
+        return None
     vote = data["votes"].get(str(vote_id))
     if not vote:
         await _send_error(f"❌ Abstimmung #{vote_id} nicht gefunden.")
@@ -171,7 +213,14 @@ async def _get_active_session(
 
     Sends an ephemeral error to *interaction* and returns None otherwise.
     """
-    data = _load_data()
+    try:
+        data = _load_data()
+    except VotingDataError:
+        await interaction.response.send_message(
+            "❌ Die Wahldaten können gerade nicht sicher gelesen werden. Bitte versuche es später erneut.",
+            ephemeral=True,
+        )
+        return None
     sid = str(session_id)
     session = data["sessions"].get(sid)
     if not session or not session.get("active"):
@@ -233,9 +282,19 @@ async def _record_votes(
             vote["votes_used"] = {}
         vote["votes_used"][user_id] = vote["votes_used"].get(user_id, 0) + count
 
-        _save_data(data)
+        try:
+            _save_data(data)
+        except VotingDataError:
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    "❌ Deine Stimme konnte nicht gespeichert werden. Bitte versuche es erneut.", ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "❌ Deine Stimme konnte nicht gespeichert werden. Bitte versuche es erneut.", ephemeral=True
+                )
+            return False
         new_remaining = remaining - count
-        vote_snapshot = dict(vote)  # snapshot for embed update outside lock
 
     # Send confirmation (outside lock)
     if new_remaining > 0:
@@ -249,7 +308,7 @@ async def _record_votes(
         await interaction.response.send_message(msg, ephemeral=True)
 
     # Update the live vote counter on the overview embed
-    await _update_vote_embed(interaction.client, vote_snapshot)
+    await _update_vote_embed(interaction.client, str(vote_id))
 
     return True
 
@@ -280,7 +339,7 @@ class VoteView(discord.ui.View):
         user_id = str(interaction.user.id)
 
         # Prevent multiple open vote dialogs
-        if user_id in _active_voters.get(self.vote_id, set()):
+        if user_id in _active_voters.get(self.vote_id, {}):
             await interaction.response.send_message(
                 "❌ Du hast bereits ein Abstimmungsfenster offen. "
                 "Bitte schließe es zuerst oder warte, bis es ausläuft.",
@@ -288,99 +347,114 @@ class VoteView(discord.ui.View):
             )
             return
 
-        # --- Eligibility: check club / department membership ---
-        department = session.get("department")
+        token = object()
+        _active_voters.setdefault(self.vote_id, {})[user_id] = token
 
-        if not department:
-            # No department restriction – any club member may vote
-            if not any(r.id == MEMBERSHIP_ROLE_ID for r in interaction.user.roles):
-                await interaction.response.send_message(
-                    "❌ Du bist kein Vereinsmitglied und darfst daher nicht abstimmen.",
+        def release_reservation():
+            voters = _active_voters.get(self.vote_id, {})
+            if voters.get(user_id) is token:
+                voters.pop(user_id)
+                if not voters:
+                    _active_voters.pop(self.vote_id, None)
+
+        dialog_sent = False
+        try:
+            # --- Eligibility: check club / department membership ---
+            department = session.get("department")
+
+            if not department:
+                # No department restriction – any club member may vote
+                if not any(r.id == MEMBERSHIP_ROLE_ID for r in interaction.user.roles):
+                    await interaction.response.send_message(
+                        "❌ Du bist kein Vereinsmitglied und darfst daher nicht abstimmen.",
+                        ephemeral=True,
+                    )
+                    return
+            else:
+                # Department-specific – verify via easyVerein
+                await interaction.response.defer(ephemeral=True)
+                ev_client = interaction.client.ev_client
+                today = datetime.now(ZoneInfo("Europe/Berlin")).date()
+
+                eligible = False
+                try:
+                    query = "{id,resignationDate,customFields{customField{id},value,selectedOptions{id,value}}}"
+                    search = MemberFilter(
+                        custom_field_name="Discord-ID",
+                        custom_field_value=user_id,
+                        isApplication=False,
+                    )
+                    members = await asyncio.to_thread(
+                        ev_client.member.get_all,
+                        query=query,
+                        search=search,
+                    )
+
+                    # Filter to active members only
+                    members = [m for m in members if is_active_on(m.resignationDate, today)]
+
+                    for m in members:
+                        if not m.customFields:
+                            continue
+                        for mcf in m.customFields:
+                            cf = mcf.customField
+                            if isinstance(cf, CustomField) and cf.id == ABTEILUNGEN_FIELD_ID:
+                                if mcf.selectedOptions:
+                                    for opt in mcf.selectedOptions:
+                                        if isinstance(opt, CustomFieldSelectOption) and opt.value == department:
+                                            eligible = True
+                                break
+                except Exception:
+                    logger.exception("Failed to verify department membership for user %s.", user_id)
+                    await interaction.followup.send(
+                        "❌ Fehler bei der Überprüfung deiner Abteilungszugehörigkeit. Bitte versuche es erneut.",
+                        ephemeral=True,
+                    )
+                    return
+
+                if not eligible:
+                    await interaction.followup.send(
+                        f"❌ Du bist kein Mitglied der Abteilung **{department}** und darfst daher nicht abstimmen.",
+                        ephemeral=True,
+                    )
+                    return
+
+            # --- Check remaining votes ---
+            remaining = _remaining_votes(session, vote, user_id)
+            if remaining <= 0:
+                sender = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+                await sender(
+                    "❌ Du hast bereits alle deine Stimmen für diese Abstimmung abgegeben.",
                     ephemeral=True,
                 )
                 return
-        else:
-            # Department-specific – verify via easyVerein
-            ev_client = interaction.client.ev_client
-            today = datetime.now(ZoneInfo("Europe/Berlin")).date()
 
-            eligible = False
-            try:
-                query = "{id,resignationDate,customFields{customField{id},value,selectedOptions{id,value}}}"
-                search = MemberFilter(
-                    custom_field_name="Discord-ID",
-                    custom_field_value=user_id,
-                    isApplication=False,
-                )
-                members = await asyncio.to_thread(
-                    ev_client.member.get_all,
-                    query=query,
-                    search=search,
-                )
-
-                # Filter to active members only
-                members = [m for m in members if is_active_on(m.resignationDate, today)]
-
-                for m in members:
-                    if not m.customFields:
-                        continue
-                    for mcf in m.customFields:
-                        cf = mcf.customField
-                        if isinstance(cf, CustomField) and cf.id == ABTEILUNGEN_FIELD_ID:
-                            if mcf.selectedOptions:
-                                for opt in mcf.selectedOptions:
-                                    if isinstance(opt, CustomFieldSelectOption) and opt.value == department:
-                                        eligible = True
-                            break
-            except Exception:
-                logger.exception("Failed to verify department membership for user %s.", user_id)
-                await interaction.response.send_message(
-                    "❌ Fehler bei der Überprüfung deiner Abteilungszugehörigkeit. Bitte versuche es erneut.",
-                    ephemeral=True,
-                )
-                return
-
-            if not eligible:
-                await interaction.response.send_message(
-                    f"❌ Du bist kein Mitglied der Abteilung **{department}** und darfst daher nicht abstimmen.",
-                    ephemeral=True,
-                )
-                return
-
-        # --- Check remaining votes ---
-        remaining = _remaining_votes(session, vote, user_id)
-        if remaining <= 0:
-            await interaction.response.send_message(
-                "❌ Du hast bereits alle deine Stimmen für diese Abstimmung abgegeben.",
+            # --- Show option select ---
+            view = VoteSelectView(self.vote_id, remaining, user_id, vote.get("options", []), token)
+            sender = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+            await sender(
+                f"**Abstimmung #{self.vote_id}: {vote['title']}**\n"
+                f"Du hast noch **{remaining}** Stimme(n) übrig.\n"
+                f"Wähle eine Option und die Anzahl der Stimmen:",
+                view=view,
                 ephemeral=True,
             )
-            return
+            dialog_sent = True
 
-        # --- Show option select ---
-        view = VoteSelectView(self.vote_id, remaining, user_id)
-        await interaction.response.send_message(
-            f"**Abstimmung #{self.vote_id}: {vote['title']}**\n"
-            f"Du hast noch **{remaining}** Stimme(n) übrig.\n"
-            f"Wähle eine Option und die Anzahl der Stimmen:",
-            view=view,
-            ephemeral=True,
-        )
-        _active_voters.setdefault(self.vote_id, set()).add(user_id)
+        finally:
+            if not dialog_sent:
+                release_reservation()
 
 
 class VoteSelectView(discord.ui.View):
     """Ephemeral view with option selector, then count selector."""
 
-    def __init__(self, vote_id: str, remaining: int, user_id: str):
+    def __init__(self, vote_id: str, remaining: int, user_id: str, options: list[str], token: object):
         super().__init__(timeout=120)
         self.vote_id = vote_id
         self.remaining = remaining
         self.user_id = user_id
-
-        # Load vote options for select menu
-        data = _load_data()
-        vote = data["votes"].get(vote_id, {})
-        options = vote.get("options", [])
+        self.token = token
 
         self.option_select = discord.ui.Select(
             placeholder="Wähle eine Option...",
@@ -395,8 +469,10 @@ class VoteSelectView(discord.ui.View):
     def _cleanup(self):
         """Remove this user from the active voters tracking."""
         voters = _active_voters.get(self.vote_id)
-        if voters:
-            voters.discard(self.user_id)
+        if voters and voters.get(self.user_id) is self.token:
+            voters.pop(self.user_id, None)
+            if not voters:
+                _active_voters.pop(self.vote_id, None)
 
     async def on_option_select(self, interaction: discord.Interaction):
         idx = int(interaction.data["values"][0])
@@ -404,13 +480,16 @@ class VoteSelectView(discord.ui.View):
 
         if self.remaining == 1:
             # Only one vote – cast directly and clean up
-            await interaction.response.edit_message(
-                content=f"⏳ Stimme wird abgegeben für **{self.selected_option}**...",
-                view=None,
-            )
-            await _record_votes(self.vote_id, self.selected_option, 1, interaction)
-            self._cleanup()
-            await interaction.delete_original_response()
+            try:
+                await interaction.response.edit_message(
+                    content=f"⏳ Stimme wird abgegeben für **{self.selected_option}**...",
+                    view=None,
+                )
+                if await _record_votes(self.vote_id, self.selected_option, 1, interaction):
+                    await interaction.delete_original_response()
+            finally:
+                self.stop()
+                self._cleanup()
         else:
             # Show count select (1 to remaining, max 25)
             self.clear_items()
@@ -432,14 +511,16 @@ class VoteSelectView(discord.ui.View):
 
     async def on_count_select(self, interaction: discord.Interaction):
         count = int(interaction.data["values"][0])
-        self.stop()
-        await interaction.response.edit_message(
-            content=f"⏳ **{count}** Stimme(n) für **{self.selected_option}** werden abgegeben...",
-            view=None,
-        )
-        await _record_votes(self.vote_id, self.selected_option, count, interaction)
-        self._cleanup()
-        await interaction.delete_original_response()
+        try:
+            await interaction.response.edit_message(
+                content=f"⏳ **{count}** Stimme(n) für **{self.selected_option}** werden abgegeben...",
+                view=None,
+            )
+            if await _record_votes(self.vote_id, self.selected_option, count, interaction):
+                await interaction.delete_original_response()
+        finally:
+            self.stop()
+            self._cleanup()
 
     async def on_timeout(self):
         self._cleanup()
@@ -479,7 +560,11 @@ class VotingCog(commands.Cog):
             )
 
         # Re-register persistent views for all active votes
-        data = _load_data()
+        try:
+            data = _load_data()
+        except VotingDataError:
+            logger.error("Election state is unreadable; persistent vote views were not registered.")
+            return
         for vote_id, vote in data.get("votes", {}).items():
             if vote.get("active"):
                 view = VoteView(vote_id)
@@ -721,7 +806,14 @@ class VotingCog(commands.Cog):
 
             # Close the vote
             vote["active"] = False
-            _save_data(data)
+            try:
+                _save_data(data)
+            except VotingDataError:
+                await interaction.response.send_message(
+                    "❌ Die Abstimmung konnte nicht sicher geschlossen werden. Bitte versuche es erneut.",
+                    ephemeral=True,
+                )
+                return
 
         # Build results embed
         tallies = vote["tallies"]
@@ -748,18 +840,10 @@ class VotingCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
-        # Try to update the original vote message to show it's closed
+        # Render the authoritative closed state under the same serializer used
+        # by live counter refreshes, preventing an older counter write reopening it.
         try:
-            channel = self.bot.get_channel(vote["channel_id"])
-            if channel:
-                original_msg = await channel.fetch_message(vote["message_id"])
-                closed_embed = original_msg.embeds[0] if original_msg.embeds else discord.Embed()
-                closed_embed.description = closed_embed.description.replace(
-                    "**Status:** 🟢 Offen", "**Status:** 🔴 Geschlossen"
-                )
-                closed_embed.color = discord.Color.red()
-                # Remove the button by setting view to empty
-                await original_msg.edit(embed=closed_embed, view=None)
+            await _refresh_vote_embed(self.bot, str(vote_id))
         except Exception:
             logger.exception("Failed to update original vote message for vote #%s.", vote_id)
 

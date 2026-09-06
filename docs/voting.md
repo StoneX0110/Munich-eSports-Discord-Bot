@@ -32,6 +32,8 @@ Anonyme Wahlen & Abstimmungen direkt in Discord. **Abteilungsleiter** verwalten 
 
 > Die Abstimmung ist **anonym** – niemand sieht, wofür du gestimmt hast.
 
+Jede bestätigte Stimme wird sofort atomar gespeichert. Kann der Bot die Wahldatei nicht sicher lesen oder schreiben, lehnt er die Aktion mit einer Fehlermeldung ab und bestätigt keine Stimme. Langsame Abteilungsprüfungen werden vor der easyVerein-Anfrage in Discord bestätigt, damit das Abstimmungsfenster nicht wegen eines Interaktions-Timeouts verloren geht.
+
 ---
 
 ## Berechtigungen

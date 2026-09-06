@@ -19,7 +19,6 @@ async def _notify_mod_channel(
     if message.is_forwardable():
         try:
             await message.forward(mod_channel)
-            await mod_channel.send("🔨 BANNED")
             return
         except discord.HTTPException:
             logger.exception("Forward to mod channel failed; sending fallback.")
@@ -60,21 +59,27 @@ class HoneypotCog(commands.Cog):
 
         member = message.author
 
+        if getattr(self.bot, "dry_run", False) is True:
+            logger.info("DRY RUN: Would ban %s (%s) for honeypot post.", member, member.id)
+            return
+
         try:
             await _notify_mod_channel(mod_channel, message)
         except discord.HTTPException:
             logger.exception("Failed to notify mod channel for honeypot hit.")
 
         try:
-            await member.ban(
-                reason="Honeypot channel post",
-                delete_message_days=1,
-            )
-            logger.info("Banned %s (%s) for honeypot post.", member, member.id)
-        except discord.Forbidden:
-            logger.exception("Missing permissions to ban %s for honeypot post.", member.id)
-        except discord.HTTPException:
+            await member.ban(reason="Honeypot channel post", delete_message_days=1)
+        except discord.HTTPException as exc:
             logger.exception("Ban failed for honeypot user %s.", member.id)
+            outcome = f"❌ BAN FAILED: {member} (`{member.id}`) — {exc}"
+        else:
+            logger.info("Banned %s (%s) for honeypot post.", member, member.id)
+            outcome = f"🔨 BANNED: {member} (`{member.id}`)"
+        try:
+            await mod_channel.send(outcome)
+        except discord.HTTPException:
+            logger.exception("Failed to report honeypot ban outcome for %s.", member.id)
 
 
 async def setup(bot: commands.Bot) -> None:

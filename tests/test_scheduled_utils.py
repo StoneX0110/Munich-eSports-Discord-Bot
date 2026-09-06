@@ -2,6 +2,7 @@
 Unit tests for shared scheduled-cog utilities.
 """
 
+import json
 from datetime import date
 from unittest.mock import MagicMock
 
@@ -64,7 +65,7 @@ def test_store_save_and_load_roundtrip(tmp_path):
     assert store.load() == data
 
 
-def test_store_load_corrupt_json_logs_and_returns_default(tmp_path):
+def test_store_load_corrupt_json_logs_and_raises(tmp_path):
     schedule_file = tmp_path / "corrupt.json"
     schedule_file.write_text("not json", encoding="utf-8")
     logger = MagicMock()
@@ -77,7 +78,8 @@ def test_store_load_corrupt_json_logs_and_returns_default(tmp_path):
         write_error_log_message="write error",
     )
 
-    assert store.load() == {"next_id": 1, "items": {}}
+    with pytest.raises(json.JSONDecodeError):
+        store.load()
     logger.exception.assert_called_once_with("Corrupt scheduled data.")
 
 
@@ -101,9 +103,8 @@ def test_store_load_io_error_is_logged_and_reraised():
     logger.exception.assert_called_once_with("Failed to read scheduled data.")
 
 
-def test_store_save_io_error_is_logged_and_reraised():
-    file_path = MagicMock()
-    file_path.write_text.side_effect = OSError("Write error")
+def test_store_save_io_error_is_logged_and_reraised(tmp_path):
+    file_path = tmp_path / "schedule.json"
     logger = MagicMock()
     store = JsonScheduleStore(
         file_path=file_path,
@@ -115,7 +116,9 @@ def test_store_save_io_error_is_logged_and_reraised():
     )
 
     with pytest.raises(OSError):
-        store.save({})
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr("utils.scheduled.atomic_write_json", MagicMock(side_effect=OSError("Write error")))
+            store.save({})
 
     logger.exception.assert_called_once_with("Failed to save scheduled data.")
 
