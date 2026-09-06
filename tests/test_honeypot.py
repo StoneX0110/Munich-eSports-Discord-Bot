@@ -2,6 +2,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from cogs import honeypot
 from cogs.honeypot import HoneypotCog
 
@@ -27,40 +29,28 @@ def _scenario(*, dry_run=False):
     return HoneypotCog(bot), message, member, mod_channel
 
 
-def test_honeypot_forwards_evidence_before_reporting_success(monkeypatch):
-    monkeypatch.setattr(honeypot.discord.abc, "Messageable", FakeMessageable)
-    cog, message, member, mod_channel = _scenario()
-    events = []
-    message.forward.side_effect = lambda _: events.append("forward")
-    member.ban.side_effect = lambda **_: events.append("ban")
-    mod_channel.send.side_effect = lambda text: events.append(text)
-    asyncio.run(cog.on_message(message))
-    assert events[:2] == ["forward", "ban"]
-    assert "BANNED" in events[2]
-
-
-def test_honeypot_reports_failed_ban(monkeypatch):
-    monkeypatch.setattr(honeypot.discord.abc, "Messageable", FakeMessageable)
-    cog, message, member, mod_channel = _scenario()
-    member.ban.side_effect = honeypot.discord.Forbidden(AsyncMock(), "denied")
-    asyncio.run(cog.on_message(message))
-    assert "BAN FAILED" in mod_channel.send.call_args.args[0]
-
-
-def test_honeypot_dry_run_never_bans(monkeypatch):
-    monkeypatch.setattr(honeypot.discord.abc, "Messageable", FakeMessageable)
-    cog, message, member, mod_channel = _scenario(dry_run=True)
-    asyncio.run(cog.on_message(message))
-    member.ban.assert_not_awaited()
-    message.forward.assert_not_awaited()
-    mod_channel.send.assert_not_awaited()
-
-
-def test_failed_success_report_is_not_misreported_as_failed_ban(monkeypatch):
+@pytest.mark.parametrize('outcome', ['success', 'ban-failure', 'report-failure', 'dry-run'])
+def test_honeypot_evidence_ban_and_result_order(monkeypatch, outcome):
     monkeypatch.setattr(honeypot.discord.abc, 'Messageable', FakeMessageable)
-    cog, message, member, mod_channel = _scenario()
-    mod_channel.send.side_effect = honeypot.discord.Forbidden(AsyncMock(), 'cannot report')
+    cog, message, member, mod_channel = _scenario(dry_run=outcome == 'dry-run')
+    events = []
+    message.forward.side_effect = lambda _: events.append('evidence')
+
+    async def ban(**kwargs):
+        events.append('ban')
+        if outcome == 'ban-failure':
+            raise honeypot.discord.Forbidden(AsyncMock(), 'denied')
+
+    async def report(text):
+        events.append(text)
+        if outcome == 'report-failure':
+            raise honeypot.discord.Forbidden(AsyncMock(), 'cannot report')
+
+    member.ban.side_effect = ban
+    mod_channel.send.side_effect = report
     asyncio.run(cog.on_message(message))
-    member.ban.assert_awaited_once()
-    mod_channel.send.assert_awaited_once()
-    assert 'BANNED' in mod_channel.send.call_args.args[0]
+    if outcome == 'dry-run':
+        assert events == []
+    else:
+        assert events[:2] == ['evidence', 'ban'] and len(events) == 3
+        assert ('BAN FAILED' if outcome == 'ban-failure' else 'BANNED') in events[2]
