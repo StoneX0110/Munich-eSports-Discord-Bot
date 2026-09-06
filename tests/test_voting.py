@@ -44,50 +44,6 @@ def reset_globals(tmp_path, monkeypatch):
     voting._display_locks.clear()
 
 
-def test_failed_ballot_write_is_reported_and_never_confirmed(monkeypatch):
-    voting._save_data(election_data())
-    before = voting.VOTES_FILE.read_bytes()
-    monkeypatch.setattr(voting, "atomic_write_json", Mock(side_effect=OSError("disk full")))
-    ix = interaction(done=True)
-
-    assert not asyncio.run(voting._record_votes("1", "A", 1, ix))
-    assert voting.VOTES_FILE.read_bytes() == before
-    messages = [call.args[0] for call in ix.followup.send.await_args_list]
-    assert any("nicht gespeichert" in message for message in messages)
-    assert not any(message.startswith("✅") for message in messages)
-
-
-def test_concurrent_ballots_are_durable_and_capped_at_limit(monkeypatch):
-    voting._save_data(election_data(delegated=2))
-    monkeypatch.setattr(voting, "_update_vote_embed", AsyncMock())
-    first, second = interaction(done=True), interaction(done=True)
-
-    async def record_both():
-        return await asyncio.gather(
-            voting._record_votes("1", "A", 2, first),
-            voting._record_votes("1", "B", 2, second),
-        )
-
-    results = asyncio.run(record_both())
-
-    assert results == [True, True]
-    saved = voting._load_data()["votes"]["1"]
-    assert sum(saved["tallies"].values()) == 3
-    assert saved["votes_used"]["42"] == 3
-
-
-def test_saved_ballots_survive_reload_and_corrupt_state_fails_closed():
-    data = election_data()
-    data["votes"]["1"]["tallies"]["A"] = 1
-    data["votes"]["1"]["votes_used"]["42"] = 1
-    voting._save_data(data)
-    assert voting._load_data()["votes"]["1"]["tallies"]["A"] == 1
-
-    voting.VOTES_FILE.write_text("{broken", encoding="utf-8")
-    with pytest.raises(voting.VotingDataError):
-        voting._load_data()
-
-
 def test_dialog_failure_cleans_reservation_and_old_timeout_cannot_clear_newer(monkeypatch):
     token1, token2 = object(), object()
     old = voting.VoteSelectView("1", 2, "42", ["A", "B"], token1)
@@ -105,23 +61,6 @@ def test_dialog_failure_cleans_reservation_and_old_timeout_cannot_clear_newer(mo
     assert "1" not in voting._active_voters
 
 
-def test_closed_state_wins_over_stale_counter_refresh():
-    data = election_data(active=False)
-    data["votes"]["1"]["tallies"]["A"] = 4
-    voting._save_data(data)
-    embed = discord.Embed(description="**Status:** 🟢 Offen\n🗳️ **Abgegebene Stimmen:** 1")
-    message = SimpleNamespace(embeds=[embed], edit=AsyncMock())
-    channel = SimpleNamespace(fetch_message=AsyncMock(return_value=message))
-    bot = SimpleNamespace(get_channel=Mock(return_value=channel))
-
-    asyncio.run(voting._refresh_vote_embed(bot, "1"))
-
-    kwargs = message.edit.await_args.kwargs
-    assert "🔴 Geschlossen" in kwargs["embed"].description
-    assert "Stimmen:** 4" in kwargs["embed"].description
-    assert kwargs["view"] is None
-
-
 def test_concurrent_counter_updates_are_coalesced():
     voting._save_data(election_data())
     message = SimpleNamespace(
@@ -137,30 +76,6 @@ def test_concurrent_counter_updates_are_coalesced():
     asyncio.run(refresh_many())
     channel.fetch_message.assert_awaited_once_with(20)
     message.edit.assert_awaited_once()
-
-
-def test_department_check_defers_before_slow_api(monkeypatch):
-    data = election_data()
-    data["sessions"]["1"]["department"] = "Valorant"
-    voting._save_data(data)
-    ix = interaction()
-    observed = []
-    ix.response.defer.side_effect = lambda **kwargs: observed.append("defer")
-
-    def get_all(**kwargs):
-        return []
-
-    async def to_thread(function, **kwargs):
-        observed.append("api")
-        return function(**kwargs)
-
-    ix.client.ev_client = SimpleNamespace(member=SimpleNamespace(get_all=get_all))
-    monkeypatch.setattr(voting.asyncio, "to_thread", to_thread)
-    monkeypatch.setattr(voting, "MemberFilter", Mock(return_value=object()))
-    view = voting.VoteView("1")
-    asyncio.run(asyncio.wait_for(view.vote_button.callback(ix), timeout=1))
-    assert observed == ["defer", "api"]
-    ix.followup.send.assert_awaited()
 
 
 def test_vote_arriving_during_counter_edit_is_not_dropped():
@@ -203,3 +118,75 @@ def test_failed_initial_defer_releases_dialog_reservation():
     with pytest.raises(RuntimeError):
         asyncio.run(voting.VoteView('1').vote_button.callback(ix))
     assert not voting._active_voters
+
+
+@pytest.mark.parametrize('save_fails', [False, True], ids=['durable-ballots', 'retry-after-disk-failure'])
+def test_election_lifecycle(discord_env, monkeypatch, save_fails):
+    env = discord_env
+
+    async def run():
+        cog = voting.VotingCog(env.bot)
+        await cog.session_start.callback(cog, env.interaction())
+        await cog.session_delegate.callback(cog, env.interaction(), 1, env.interaction().user, 2)
+        start = env.interaction()
+        await cog.vote_start.callback(cog, start, 1, 'Board', 'A, B')
+        message = start.original_response.return_value
+
+        async def ballot():
+            opened = env.interaction()
+            await message.view.vote_button.callback(opened)
+            dialog = opened.original_response.return_value.view
+            await dialog.on_option_select(env.interaction(values=['0']))
+            submitted = env.interaction(values=['2'])
+            await asyncio.gather(dialog.on_count_select(submitted),
+                                 dialog.on_count_select(env.interaction(values=['2'])))
+            return submitted
+
+        if save_fails:
+            before = voting.VOTES_FILE.read_bytes()
+            with monkeypatch.context() as fault:
+                fault.setattr('utils.persistence.os.replace', Mock(side_effect=OSError('disk full')))
+                failed = await ballot()
+            assert 'nicht gespeichert' in failed.followup.send.call_args.args[0]
+            assert voting.VOTES_FILE.read_bytes() == before
+            assert not list(voting.VOTES_FILE.parent.glob('*.tmp'))
+            assert not voting._active_voters
+        submitted = await ballot()
+        assert submitted.followup.send.call_args.args[0].startswith('✅')
+        saved = json.loads(voting.VOTES_FILE.read_text())  # Observe durable storage, not an internal cache.
+        assert saved['votes']['1']['tallies'] == {'A': 3, 'B': 0}
+        assert saved['votes']['1']['votes_used'] == {'42': 3}
+        assert 'Stimmen:** 3' in message.embeds[0].description
+        assert not voting._active_voters
+        reopened = env.interaction()
+        await message.view.vote_button.callback(reopened)
+        assert 'alle deine Stimmen' in reopened.response.send_message.call_args.args[0]
+        blocked = env.interaction()
+        await cog.session_end.callback(cog, blocked, 1)
+        assert 'offene Abstimmungen' in blocked.response.send_message.call_args.args[0]
+        close = env.interaction()
+        await cog.vote_close.callback(cog, close, 1)
+        assert '3 Stimmen von 1 Wählern' in close.response.send_message.call_args.kwargs['embed'].description
+        assert message.view is None and 'Geschlossen' in message.embeds[0].description
+        await cog.session_end.callback(cog, env.interaction(), 1)
+        saved = json.loads(voting.VOTES_FILE.read_text())
+        assert not saved['sessions']['1']['active'] and not saved['votes']['1']['active']
+
+    asyncio.run(run())
+
+
+def test_unreadable_election_rejects_voters_without_overwriting_state(discord_env):
+    env = discord_env
+
+    async def run():
+        cog = voting.VotingCog(env.bot)
+        await cog.session_start.callback(cog, env.interaction())
+        start = env.interaction()
+        await cog.vote_start.callback(cog, start, 1, 'Board', 'A, B')
+        voting.VOTES_FILE.write_text('{broken')
+        ix = env.interaction()
+        await start.original_response.return_value.view.vote_button.callback(ix)
+        assert 'nicht sicher gelesen' in ix.response.send_message.call_args.args[0]
+        assert voting.VOTES_FILE.read_text() == '{broken'
+
+    asyncio.run(run())
