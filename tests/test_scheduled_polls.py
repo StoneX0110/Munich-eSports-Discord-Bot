@@ -7,6 +7,7 @@ from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 import pytest
+import discord
 
 import config
 from cogs import scheduled_polls
@@ -25,6 +26,9 @@ from cogs.scheduled_polls import (
 def reset_scheduled_polls_cache():
     scheduled_polls._polls_data_cache = None
     scheduled_polls._polls_data_dirty = False
+    scheduled_polls._message_update_tasks.clear()
+    scheduled_polls._message_update_revisions.clear()
+    scheduled_polls._message_edit_locks.clear()
     yield
     scheduled_polls._polls_data_cache = None
     scheduled_polls._polls_data_dirty = False
@@ -133,6 +137,8 @@ def _department_head_interaction():
     interaction.user.roles = [role]
     interaction.channel_id = 456
     interaction.response.send_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
     return interaction
 
 
@@ -144,6 +150,8 @@ def _staff_interaction():
     interaction.user.roles = [role]
     interaction.channel_id = 456
     interaction.response.send_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
     return interaction
 
 
@@ -176,7 +184,7 @@ def test_poll_create_without_reminder_stores_no_reminder_config():
         assert saved_poll["week_start_day"] == "Montag"
         assert saved_poll["reminder_weekday"] is None
         assert saved_poll["reminder_hour"] is None
-        response = interaction.response.send_message.call_args[0][0]
+        response = interaction.followup.send.call_args[0][0]
         assert "**Erster Tag der Spielwoche:** Montag" in response
         assert "**Reminder:** keine" in response
 
@@ -203,7 +211,7 @@ def test_poll_create_allows_staff_role():
         save_mock.assert_called_once()
         saved_poll = save_mock.call_args[0][0]["scheduled_polls"]["1"]
         assert saved_poll["created_by"] == interaction.user.id
-        response = interaction.response.send_message.call_args[0][0]
+        response = interaction.followup.send.call_args[0][0]
         assert response.startswith("✅ Wiederkehrende Umfrage #1 erstellt!")
 
     asyncio.run(run())
@@ -231,7 +239,7 @@ def test_poll_create_with_valid_reminder_stores_reminder_config():
         saved_poll = save_mock.call_args[0][0]["scheduled_polls"]["1"]
         assert saved_poll["reminder_weekday"] == "Sonntag"
         assert saved_poll["reminder_hour"] == 18
-        response = interaction.response.send_message.call_args[0][0]
+        response = interaction.followup.send.call_args[0][0]
         assert "**Reminder:** Sonntag um 18:00" in response
 
     asyncio.run(run())
@@ -259,7 +267,7 @@ def test_poll_create_with_week_start_day_stores_week_start_day():
 
         saved_poll = save_mock.call_args[0][0]["scheduled_polls"]["1"]
         assert saved_poll["week_start_day"] == "Freitag"
-        response = interaction.response.send_message.call_args[0][0]
+        response = interaction.followup.send.call_args[0][0]
         assert "**Erster Tag der Spielwoche:** Freitag" in response
 
     asyncio.run(run())
@@ -364,6 +372,8 @@ def test_poll_list_shows_reminder_schedule():
         bot = MagicMock()
         cog = ScheduledPollCog(bot)
         interaction = _department_head_interaction()
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
         data = {
             "next_scheduled_poll_id": 3,
             "scheduled_polls": {
@@ -388,13 +398,13 @@ def test_poll_list_shows_reminder_schedule():
         with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
             await ScheduledPollCog.poll_list.callback(cog, interaction)
 
-        embed = interaction.response.send_message.call_args.kwargs["embed"]
+        embed = interaction.followup.send.call_args.kwargs["embed"]
         first, second = embed.fields
         assert "**Erster Tag der Spielwoche:** Freitag" in first.value
         assert "**Erster Tag der Spielwoche:** Montag" in second.value
         assert "**Reminder:** Sonntag um 05:00" in first.value
         assert "**Reminder:** keine" in second.value
-        assert interaction.response.send_message.call_args.kwargs["ephemeral"] is True
+        assert interaction.followup.send.call_args.kwargs["ephemeral"] is True
 
     asyncio.run(run())
 
@@ -746,7 +756,7 @@ def test_handle_posting_uses_poll_data_lock():
                 with patch("cogs.scheduled_polls._save_polls_data"):
                     await cog._handle_posting(date(2026, 5, 27))
 
-        assert fake_lock.enter_count == 1
+        assert fake_lock.enter_count == 3
 
     asyncio.run(run())
 
@@ -847,7 +857,7 @@ def test_trigger_reminder_forces_selected_poll_without_reminder_config():
         _, kwargs = reminder_mock.call_args
         assert kwargs["poll_id"] == "1"
         assert kwargs["force"] is True
-        assert data["scheduled_polls"]["1"]["active_instance"]["reminded"] is False
+        assert data["scheduled_polls"]["1"]["active_instance"]["reminded"] is True
         interaction.followup.send.assert_called_once_with(
             "✅ Trigger-Reminder für Umfrage #1 ausgeführt!"
         )
@@ -864,6 +874,10 @@ def test_poll_button_allows_users_with_poll_role():
         interaction.user.roles = [role]
         interaction.response.send_message = AsyncMock()
         interaction.response.edit_message = AsyncMock()
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        interaction.message.id = 999
+        interaction.message.edit = AsyncMock()
 
         data = {
             "next_scheduled_poll_id": 2,
@@ -889,7 +903,8 @@ def test_poll_button_allows_users_with_poll_role():
                 await view.make_callback("Montag")(interaction)
 
         interaction.response.send_message.assert_not_called()
-        interaction.response.edit_message.assert_called_once()
+        interaction.response.defer.assert_awaited_once()
+        interaction.message.edit.assert_awaited_once()
         save_mock.assert_not_called()
         assert scheduled_polls._polls_data_dirty is True
         assert data["scheduled_polls"]["1"]["active_instance"]["responses"] == {
@@ -908,6 +923,9 @@ def test_poll_button_rejects_users_without_poll_role():
         interaction.user.roles = [role]
         interaction.response.send_message = AsyncMock()
         interaction.response.edit_message = AsyncMock()
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        interaction.message.id = 999
 
         data = {
             "next_scheduled_poll_id": 2,
@@ -932,7 +950,7 @@ def test_poll_button_rejects_users_without_poll_role():
             with patch("cogs.scheduled_polls._save_polls_data", save_mock):
                 await view.make_callback("Montag")(interaction)
 
-        interaction.response.send_message.assert_called_once_with(
+        interaction.followup.send.assert_called_once_with(
             "❌ Nur Mitglieder der Umfrage-Rolle können abstimmen.",
             ephemeral=True,
         )
@@ -988,5 +1006,244 @@ def test_setup_registers_cog():
         bot.add_cog.assert_called_once()
         cog = bot.add_cog.call_args[0][0]
         assert isinstance(cog, ScheduledPollCog)
+
+    asyncio.run(run())
+
+
+def test_large_poll_embed_stays_within_discord_description_limit():
+    responses = {str(10**17 + i): list(scheduled_polls.WEEKDAYS) for i in range(100)}
+    description = _build_poll_embed(200, "2026-06-01", responses).description
+    assert len(description) <= 4096
+    assert "[100]" in description
+    assert "weitere" in description
+
+
+def test_poll_list_pages_respect_field_and_total_character_limits():
+    polls = {
+        str(i): {
+            "channel_id": int("9" * 18), "role_id": int("8" * 18),
+            "weekday": "Donnerstag" * 20, "week_start_day": "Mittwoch" * 20,
+            "reminder_weekday": "Donnerstag" * 20, "reminder_hour": 18,
+        }
+        for i in range(60)
+    }
+    embeds = scheduled_polls._poll_list_embeds(polls)
+    assert len(embeds) > 2
+    assert sum(len(embed.fields) for embed in embeds) == 60
+    for embed in embeds:
+        assert len(embed.fields) <= 25
+        assert len(embed.title or "") + sum(len(f.name) + len(f.value) for f in embed.fields) <= 6000
+
+
+def test_reminders_are_chunked_below_message_limit():
+    poll = {"channel_id": 100}
+    instance = {"message_id": 999}
+    mentions = [f"<@{10**17 + i}>" for i in range(150)]
+    messages = scheduled_polls._reminder_messages(mentions, poll, instance)
+    assert len(messages) > 1
+    assert all(len(message) <= 2000 for message in messages)
+    assert all(mention in "".join(messages) for mention in mentions)
+
+
+def test_failed_force_flush_remains_dirty_for_retry():
+    data = {"next_scheduled_poll_id": 2, "scheduled_polls": {"1": {}}}
+    scheduled_polls._polls_data_cache = data
+    scheduled_polls._mark_polls_data_dirty()
+    with patch("cogs.scheduled_polls._save_polls_data", side_effect=[OSError("disk"), None]) as save:
+        with pytest.raises(OSError):
+            scheduled_polls._flush_polls_data(force=True)
+        assert scheduled_polls._polls_data_dirty is True
+        assert scheduled_polls._flush_polls_data() is True
+    assert save.call_count == 2
+    assert scheduled_polls._polls_data_dirty is False
+
+
+def test_queued_click_from_replaced_message_is_rejected_after_lock_release():
+    async def run():
+        view = ScheduledPollView("1")
+        interaction = MagicMock()
+        interaction.user.id = 111
+        interaction.user.roles = [MagicMock(id=200)]
+        interaction.message.id = 999
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        data = {"next_scheduled_poll_id": 2, "scheduled_polls": {"1": {
+            "role_id": 200,
+            "active_instance": {"message_id": 1000, "target_week_start": "2026-06-01", "responses": {}},
+        }}}
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
+            await view.make_callback("Montag")(interaction)
+        interaction.response.defer.assert_awaited_once()
+        interaction.followup.send.assert_awaited_once_with(
+            "❌ Diese Umfrage ist nicht mehr aktiv.", ephemeral=True
+        )
+        assert data["scheduled_polls"]["1"]["active_instance"]["responses"] == {}
+    asyncio.run(run())
+
+
+def test_post_failure_keeps_old_interactive_instance():
+    async def run():
+        bot = MagicMock()
+        channel = MagicMock()
+        channel.send = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "failed"))
+        channel.fetch_message = AsyncMock()
+        bot.get_channel.return_value = channel
+        cog = ScheduledPollCog(bot)
+        old = {"message_id": 999, "target_week_start": "2026-05-25", "responses": {}}
+        data = {"next_scheduled_poll_id": 2, "scheduled_polls": {"1": {
+            "channel_id": 100, "role_id": 200, "weekday": "Mittwoch",
+            "active_instance": old,
+        }}}
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data), \
+             patch("cogs.scheduled_polls._save_polls_data") as save:
+            await cog._handle_posting(date(2026, 5, 27))
+        assert data["scheduled_polls"]["1"]["active_instance"] == old
+        channel.fetch_message.assert_not_awaited()
+        save.assert_not_called()
+    asyncio.run(run())
+
+
+def test_dry_run_does_not_send_or_mutate():
+    async def run():
+        bot = MagicMock()
+        bot.dry_run = True
+        channel = AsyncMock()
+        bot.get_channel.return_value = channel
+        cog = ScheduledPollCog(bot)
+        data = {"next_scheduled_poll_id": 2, "scheduled_polls": {"1": {
+            "channel_id": 100, "role_id": 200, "weekday": "Mittwoch", "active_instance": None,
+        }}}
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data), \
+             patch("cogs.scheduled_polls._save_polls_data") as save:
+            await cog._handle_posting(date(2026, 5, 27))
+            await cog._handle_reminders(date(2026, 5, 27), 8)
+        channel.send.assert_not_awaited()
+        save.assert_not_called()
+        assert data["scheduled_polls"]["1"]["active_instance"] is None
+    asyncio.run(run())
+
+
+def test_concurrent_votes_coalesce_and_publish_latest_state():
+    async def run():
+        view = ScheduledPollView("1")
+        message = MagicMock()
+        message.id = 999
+        message.edit = AsyncMock()
+        data = {"next_scheduled_poll_id": 2, "scheduled_polls": {"1": {
+            "role_id": 200,
+            "active_instance": {"message_id": 999, "target_week_start": "2026-06-01", "responses": {}},
+        }}}
+        interactions = []
+        for user_id in range(100):
+            interaction = MagicMock()
+            interaction.user.id = user_id
+            interaction.user.roles = [MagicMock(id=200)]
+            interaction.message = message
+            interaction.response.defer = AsyncMock()
+            interaction.followup.send = AsyncMock()
+            interactions.append(interaction)
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
+            await asyncio.gather(*(view.make_callback("Montag")(i) for i in interactions))
+        assert len(data["scheduled_polls"]["1"]["active_instance"]["responses"]) == 100
+        assert message.edit.await_count <= 2
+        assert "Montag (01.06.) [100]" in message.edit.call_args.kwargs["embed"].description
+        assert all(i.response.defer.await_count == 1 for i in interactions)
+    asyncio.run(run())
+
+
+def test_new_instance_survives_failed_old_message_archival():
+    async def run():
+        bot = MagicMock()
+        channel = MagicMock()
+        new_message = MagicMock(id=1000)
+        channel.send = AsyncMock(return_value=new_message)
+        channel.fetch_message = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "failed"))
+        bot.get_channel.return_value = channel
+        cog = ScheduledPollCog(bot)
+        old = {"message_id": 999, "target_week_start": "2026-05-25", "responses": {}}
+        data = {"next_scheduled_poll_id": 2, "scheduled_polls": {"1": {
+            "channel_id": 100, "role_id": 200, "weekday": "Mittwoch", "active_instance": old,
+        }}}
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data), \
+             patch("cogs.scheduled_polls._save_polls_data") as save:
+            await cog._handle_posting(date(2026, 5, 27))
+        assert data["scheduled_polls"]["1"]["active_instance"]["message_id"] == 1000
+        save.assert_called_once()
+        channel.fetch_message.assert_awaited_once_with(999)
+    asyncio.run(run())
+
+
+def test_vote_defers_before_waiting_for_data_lock():
+    async def run():
+        view = ScheduledPollView("1")
+        interaction = MagicMock()
+        interaction.user.id = 111
+        interaction.user.roles = [MagicMock(id=200)]
+        interaction.message.id = 999
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        data = {"next_scheduled_poll_id": 2, "scheduled_polls": {"1": {
+            "role_id": 200,
+            "active_instance": {"message_id": 1000, "target_week_start": "2026-06-01", "responses": {}},
+        }}}
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data):
+            await scheduled_polls._polls_data_lock.acquire()
+            task = asyncio.create_task(view.make_callback("Montag")(interaction))
+            await asyncio.sleep(0)
+            interaction.response.defer.assert_awaited_once()
+            assert not task.done()
+            scheduled_polls._polls_data_lock.release()
+            await task
+    asyncio.run(run())
+
+
+def test_delete_defers_then_waits_for_poll_lifecycle():
+    async def run():
+        bot = MagicMock()
+        cog = ScheduledPollCog(bot)
+        interaction = _department_head_interaction()
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        data = {"next_scheduled_poll_id": 2, "scheduled_polls": {"1": {
+            "channel_id": 100, "role_id": 200, "active_instance": None,
+        }}}
+        lock = cog._lifecycle_locks["1"]
+        await lock.acquire()
+        with patch("cogs.scheduled_polls._load_polls_data", return_value=data), \
+             patch("cogs.scheduled_polls._save_polls_data"):
+            task = asyncio.create_task(ScheduledPollCog.poll_delete.callback(cog, interaction, 1))
+            await asyncio.sleep(0)
+            interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+            assert "1" in data["scheduled_polls"]
+            lock.release()
+            await task
+        assert "1" not in data["scheduled_polls"]
+        interaction.followup.send.assert_awaited_once()
+    asyncio.run(run())
+
+
+def test_vote_during_replacement_does_not_cancel_posting():
+    async def run():
+        bot = MagicMock()
+        channel = MagicMock()
+        bot.get_channel.return_value = channel
+        old = {'message_id': 999, 'target_week_start': '2026-05-25', 'responses': {}}
+        data = {'scheduled_polls': {'1': {
+            'channel_id': 100, 'role_id': 200, 'weekday': 'Mittwoch', 'active_instance': old,
+        }}}
+        retired_message = MagicMock(edit=AsyncMock())
+        channel.fetch_message = AsyncMock(return_value=retired_message)
+
+        async def send(**kwargs):
+            old['responses']['111'] = ['Montag']
+            return MagicMock(id=1000)
+
+        channel.send = send
+        with patch.object(scheduled_polls, '_load_polls_data', return_value=data), \
+             patch.object(scheduled_polls, '_save_polls_data'):
+            await ScheduledPollCog(bot)._handle_posting(date(2026, 5, 27))
+        assert data['scheduled_polls']['1']['active_instance']['message_id'] == 1000
+        assert '<@111>' in retired_message.edit.call_args.kwargs['embed'].description
+        assert retired_message.edit.call_args.kwargs['view'] is None
 
     asyncio.run(run())

@@ -30,7 +30,7 @@ Automatische Nachrichten mit Rollen-Ping für regelmäßige Team-Termine, Friste
 | `hour` | Stunde im 24h-Format von `0` bis `23`, z.B. `18` für 18:00. |
 | Zeitzone | Alle Zeiten werden in `Europe/Berlin` ausgewertet. |
 
-Der Bot prüft einmal pro Stunde, ob ein Reminder fällig ist. Automatische Reminder werden pro Kalendertag nur einmal gesendet, damit ein Bot-Neustart oder erneuter Loop-Lauf keine doppelte Nachricht erzeugt.
+Der Bot prüft einmal pro Stunde, ob ein Reminder fällig ist. Automatische Reminder werden pro Kalendertag nur einmal gesendet, damit ein Bot-Neustart oder erneuter Loop-Lauf keine doppelte Nachricht erzeugt. Im Dry-Run startet der Hintergrund-Loop nicht; auch manuell aufgerufene Sendelogik unterdrückt echte Nachrichten.
 
 ---
 
@@ -52,6 +52,8 @@ Nur die konfigurierte Rolle darf tatsächlich pingen. `@everyone`, User-Pings od
 `/scheduled-reminder trigger-send` sendet den Reminder sofort, unabhängig vom konfigurierten Wochentag, der Stunde oder einer bereits automatisch gesendeten Nachricht am selben Tag.
 
 Wenn der Zielkanal oder die Rolle nicht gefunden wird oder Discord das Senden ablehnt, markiert der Bot den Reminder nicht als gesendet.
+
+Die Liste wird bei vielen Remindern automatisch auf mehrere Discord-Embeds verteilt.
 
 ---
 

@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
+from utils.persistence import atomic_write_json
 
 WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
@@ -30,14 +31,14 @@ class JsonScheduleStore:
     write_error_log_message: str
 
     def load(self) -> dict[str, Any]:
-        """Load JSON data, returning a fresh default for missing or corrupt files."""
+        """Load JSON data, returning a fresh default only when the file is missing."""
         if not self.file_path.exists():
             return self.default_factory()
         try:
             return json.loads(self.file_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             self.logger.exception(self.corrupt_log_message)
-            return self.default_factory()
+            raise
         except OSError:
             self.logger.exception(self.read_error_log_message)
             raise
@@ -45,10 +46,7 @@ class JsonScheduleStore:
     def save(self, data: dict[str, Any]) -> None:
         """Save JSON data with stable formatting."""
         try:
-            self.file_path.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            atomic_write_json(self.file_path, data)
         except OSError:
             self.logger.exception(self.write_error_log_message)
             raise

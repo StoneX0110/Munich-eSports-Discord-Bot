@@ -41,18 +41,14 @@ from messages import (
     WELCOME_MESSAGES,
     WELCOME_MESSAGES_MULTIPLE,
 )
-from utils.easyverein import MemberDateFilter
+from utils.easyverein import fetch_active_members
+from utils.persistence import atomic_write_json
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _LOG_DIR = LOG_DIR
-_LOG_DIR.mkdir(exist_ok=True)
-
-# Console handler
-logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
-_formatter = logging.Formatter(_LOG_FORMAT)
 
 
 # 1. Main Bot & Everything Else Logger (Daily rotation)
@@ -66,41 +62,32 @@ class _BotLogFilter(logging.Filter):
         return True
 
 
-_bot_handler = TimedRotatingFileHandler(
-    _LOG_DIR / "bot.log",
-    when="midnight",
-    interval=1,
-    backupCount=14,  # Keep logs for 14 days
-    encoding="utf-8",
-)
-_bot_handler.setLevel(logging.INFO)
-_bot_handler.setFormatter(_formatter)
-_bot_handler.addFilter(_BotLogFilter())
-
-logging.getLogger().addHandler(_bot_handler)  # attach to root logger
 logger = logging.getLogger("munich_esports_bot")
 
-# 2. Voting Logger (Voting + Session commands)
-_voting_handler = RotatingFileHandler(
-    _LOG_DIR / "voting.log",
-    maxBytes=5 * 1024 * 1024,
-    backupCount=5,
-    encoding="utf-8",
-)
-_voting_handler.setLevel(logging.INFO)
-_voting_handler.setFormatter(_formatter)
-logging.getLogger("munich_esports_bot.voting").addHandler(_voting_handler)
 
-# 3. Department Logger (Department commands)
-_dept_handler = RotatingFileHandler(
-    _LOG_DIR / "department.log",
-    maxBytes=5 * 1024 * 1024,
-    backupCount=5,
-    encoding="utf-8",
-)
-_dept_handler.setLevel(logging.INFO)
-_dept_handler.setFormatter(_formatter)
-logging.getLogger("munich_esports_bot.department").addHandler(_dept_handler)
+def configure_logging() -> None:
+    """Configure file logging at process startup rather than module import."""
+    if getattr(configure_logging, "configured", False):
+        return
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
+    formatter = logging.Formatter(_LOG_FORMAT)
+    bot_handler = TimedRotatingFileHandler(
+        _LOG_DIR / "bot.log", when="midnight", interval=1, backupCount=14, encoding="utf-8"
+    )
+    bot_handler.setFormatter(formatter)
+    bot_handler.addFilter(_BotLogFilter())
+    logging.getLogger().addHandler(bot_handler)
+    for name, filename in (
+        ("munich_esports_bot.voting", "voting.log"),
+        ("munich_esports_bot.department", "department.log"),
+    ):
+        handler = RotatingFileHandler(
+            _LOG_DIR / filename, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        )
+        handler.setFormatter(formatter)
+        logging.getLogger(name).addHandler(handler)
+    configure_logging.configured = True
 
 # ---------------------------------------------------------------------------
 # Discord bot setup
@@ -126,13 +113,20 @@ def _handle_token_refresh(new_token: BearerToken) -> None:
     logger.info("easyVerein API token was refreshed and saved to .env.")
 
 
-ev_client = EasyvereinAPI(
-    EV_API_KEY,
-    api_version="v2.0",
-    token_refresh_callback=_handle_token_refresh,
-    auto_refresh_token=True,
-)
-bot.ev_client = ev_client
+ev_client: EasyvereinAPI | None = None
+
+
+def initialize_easyverein_client() -> EasyvereinAPI:
+    """Create the API client at startup, after configuration has been validated."""
+    global ev_client
+    ev_client = EasyvereinAPI(
+        EV_API_KEY,
+        api_version="v2.0",
+        token_refresh_callback=_handle_token_refresh,
+        auto_refresh_token=True,
+    )
+    bot.ev_client = ev_client
+    return ev_client
 
 
 # ---------------------------------------------------------------------------
@@ -150,17 +144,18 @@ def _load_known_members() -> set[int] | None:
     try:
         data = json.loads(KNOWN_MEMBERS_FILE.read_text(encoding="utf-8"))
         return set(data)
-    except Exception:
-        logger.exception("Failed to load %s.", KNOWN_MEMBERS_FILE)
-        return None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        logger.exception("Failed to load %s; preserving the existing file.", KNOWN_MEMBERS_FILE)
+        raise
 
 
 def _save_known_members(ids: set[int]) -> None:
     """Persist the set of known easyVerein member IDs to disk."""
     try:
-        KNOWN_MEMBERS_FILE.write_text(json.dumps(sorted(ids)), encoding="utf-8")
-    except Exception:
+        atomic_write_json(KNOWN_MEMBERS_FILE, sorted(ids))
+    except OSError:
         logger.exception("Failed to save %s.", KNOWN_MEMBERS_FILE)
+        raise
 
 
 def _get_custom_field_value(member: Member, field_id: int) -> str | None:
@@ -270,26 +265,7 @@ async def daily_task():
     today = datetime.now(DAILY_RUN_TIME.tzinfo).date()
 
     try:
-        # 1. Members with NO resignation date (indefinite membership)
-        search_indefinite = MemberDateFilter(
-            resignationDate__isnull=True,
-            isApplication=False,
-        )
-        members_indefinite = await asyncio.to_thread(ev_client.member.get_all, query=query, search=search_indefinite)
-
-        # 2. Members with FUTURE resignation date (still active until that date)
-        search_future_resignation = MemberDateFilter(
-            resignationDate__gte=today,
-            isApplication=False,
-        )
-        members_resigning = await asyncio.to_thread(
-            ev_client.member.get_all, query=query, search=search_future_resignation
-        )
-
-        # Combine both lists (using a dict by ID to deduplicate just in case)
-        ev_members_map = {m.id: m for m in members_indefinite + members_resigning}
-        ev_members = list(ev_members_map.values())
-
+        ev_members = await fetch_active_members(ev_client, query=query, today=today)
     except Exception:
         logger.exception("Failed to fetch members from easyVerein.")
         return
@@ -422,15 +398,21 @@ async def daily_task():
     # New club member welcome messages (in #general)
     # ------------------------------------------------------------------
     if general_channel:
-        previous_known = _load_known_members()
+        try:
+            previous_known = _load_known_members()
+            known_members_loaded = True
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            logger.error("Skipping welcome detection because known-members state could not be loaded.")
+            previous_known = None
+            known_members_loaded = False
         current_ids = {m.id for m in ev_members}
 
-        if previous_known is None:
+        if known_members_loaded and previous_known is None:
             logger.info(
                 "First run: saving %d known members (no welcome messages sent).",
                 len(current_ids),
             )
-        else:
+        elif known_members_loaded:
             new_member_ids = current_ids - previous_known
             if new_member_ids:
                 logger.info("Detected %d new club member(s).", len(new_member_ids))
@@ -467,8 +449,11 @@ async def daily_task():
 
         if dry_run:
             logger.info("DRY RUN: Would save %d known member IDs to %s.", len(current_ids), KNOWN_MEMBERS_FILE)
-        else:
-            _save_known_members(current_ids)
+        elif known_members_loaded:
+            try:
+                _save_known_members(current_ids)
+            except OSError:
+                logger.error("Known-members state was not updated; the daily task will continue.")
 
     # ------------------------------------------------------------------
     # Membership anniversary shoutouts (in #member-general)
@@ -528,6 +513,8 @@ async def daily_task():
 # ---------------------------------------------------------------------------
 async def _setup_hook():
     """Load extensions and sync commands - runs once before on_ready."""
+    if getattr(bot, "dry_run", False):
+        return
     await bot.load_extension("cogs.voting")
     logger.info("Voting cog loaded.")
     await bot.load_extension("cogs.department")
@@ -568,6 +555,7 @@ async def on_ready():
 # Entry point
 # ---------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> None:
+    configure_logging()
     args = sys.argv[1:] if argv is None else argv
     if "--dry-run" in args:
         bot.dry_run = True
@@ -578,6 +566,8 @@ def main(argv: list[str] | None = None) -> None:
     if not EV_API_KEY:
         logger.critical("EV_API_KEY is not set. Exiting.")
         raise SystemExit(1)
+
+    initialize_easyverein_client()
 
     bot.run(DISCORD_TOKEN, log_handler=None)
 

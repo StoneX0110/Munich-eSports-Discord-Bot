@@ -31,6 +31,8 @@ DEFAULT_REMINDERS_DATA = {
 
 SCHEDULED_REMINDER_MANAGER_ROLE_IDS = {DEPARTMENT_HEAD_ROLE_ID, STAFF_ROLE_ID}
 MAX_DISCORD_MESSAGE_LENGTH = 2000
+MAX_EMBED_FIELDS = 25
+MAX_EMBED_TOTAL_LENGTH = 6000
 _reminders_data_lock = asyncio.Lock()
 
 
@@ -50,7 +52,7 @@ def _reminders_store() -> JsonScheduleStore:
         file_path=REMINDERS_FILE,
         default_factory=_default_reminders_data,
         logger=logger,
-        corrupt_log_message="Corrupt scheduled reminders file detected. Falling back to default empty structure.",
+        corrupt_log_message="Corrupt scheduled reminders file detected. Preserving the file and refusing to load it.",
         read_error_log_message="Failed to read scheduled reminders file due to an I/O error.",
         write_error_log_message="Failed to save scheduled reminders data.",
     )
@@ -61,7 +63,7 @@ def _load_reminders_data() -> dict:
     Loads scheduled reminder configuration from the JSON storage file.
 
     If the file does not exist, returns the default structure.
-    If the file is corrupt, logs the error and returns the default structure.
+    If the file is corrupt, logs and raises the error without replacing it.
     """
     return _reminders_store().load()
 
@@ -121,6 +123,30 @@ def _allowed_mentions_for(role: discord.Role) -> discord.AllowedMentions:
     )
 
 
+def _build_reminder_list_embeds(reminders: dict) -> list[discord.Embed]:
+    """Build reminder-list pages within Discord's field and total-size limits."""
+    embeds: list[discord.Embed] = []
+    embed = discord.Embed(title="📋 Wiederkehrende Reminder", color=discord.Color.blue())
+    for reminder_id, reminder in reminders.items():
+        name = f"#{reminder_id}"
+        value = (
+            f"**Rolle:** <@&{reminder['role_id']}>\n"
+            f"**Kanal:** <#{reminder['channel_id']}>\n"
+            f"**Zeitplan:** {_format_schedule(reminder)}\n"
+            f"**Zuletzt gesendet:** {_format_last_sent(reminder)}\n"
+            f"**Nachricht:** {_message_preview(reminder['message'])}"
+        )
+        if len(embed.fields) >= MAX_EMBED_FIELDS or len(embed) + len(name) + len(value) > MAX_EMBED_TOTAL_LENGTH:
+            embeds.append(embed)
+            embed = discord.Embed(
+                title="📋 Wiederkehrende Reminder (Fortsetzung)",
+                color=discord.Color.blue(),
+            )
+        embed.add_field(name=name, value=value, inline=False)
+    embeds.append(embed)
+    return embeds
+
+
 # ---------------------------------------------------------------------------
 # The Cog
 # ---------------------------------------------------------------------------
@@ -163,26 +189,14 @@ class ScheduledReminderCog(commands.Cog):
                 )
                 return
 
-            embed = discord.Embed(
-                title="📋 Wiederkehrende Reminder",
-                color=discord.Color.blue(),
-            )
-            for reminder_id, reminder in reminders.items():
-                role_mention = f"<@&{reminder['role_id']}>"
-                channel_mention = f"<#{reminder['channel_id']}>"
-                embed.add_field(
-                    name=f"#{reminder_id}",
-                    value=(
-                        f"**Rolle:** {role_mention}\n"
-                        f"**Kanal:** {channel_mention}\n"
-                        f"**Zeitplan:** {_format_schedule(reminder)}\n"
-                        f"**Zuletzt gesendet:** {_format_last_sent(reminder)}\n"
-                        f"**Nachricht:** {_message_preview(reminder['message'])}"
-                    ),
-                    inline=False,
-                )
+            embeds = _build_reminder_list_embeds(reminders)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if len(embeds) == 1:
+            await interaction.response.send_message(embed=embeds[0], ephemeral=True)
+        else:
+            await interaction.response.defer(ephemeral=True)
+            for embed in embeds:
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
     # -----------------------------------------------------------------------
     # /scheduled-reminder delete
@@ -332,6 +346,9 @@ class ScheduledReminderCog(commands.Cog):
     # Lifecycle & background scheduling
     # -----------------------------------------------------------------------
     async def cog_load(self):
+        if getattr(self.bot, "dry_run", False) is True:
+            logger.info("Dry-run active; scheduled reminders background loop not started.")
+            return
         if not self.scheduled_reminder_loop.is_running():
             self.scheduled_reminder_loop.start()
         logger.info("Scheduled reminders cog loaded; background loop started.")
@@ -363,6 +380,10 @@ class ScheduledReminderCog(commands.Cog):
     ) -> bool:
         today_weekday = _weekday_name(today)
         today_str = today.isoformat()
+
+        if getattr(self.bot, "dry_run", False) is True:
+            logger.info("DRY RUN: Scheduled reminder sends are suppressed.")
+            return False
 
         async with _reminders_data_lock:
             data = _load_reminders_data()

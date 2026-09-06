@@ -2,7 +2,6 @@
 Department-related commands for the Munich eSports Discord bot.
 """
 
-import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -16,7 +15,7 @@ from config import (
     DEPARTMENT_ROLES,
     GUILD_ID,
 )
-from utils.easyverein import MemberDateFilter
+from utils.easyverein import fetch_active_members
 
 logger = logging.getLogger("munich_esports_bot.department")
 
@@ -62,22 +61,9 @@ class DepartmentCog(commands.Cog):
         today = datetime.now(ZoneInfo("Europe/Berlin")).date()
 
         try:
-            search_indefinite = MemberDateFilter(resignationDate__isnull=True, isApplication=False)
-            members_indefinite = await asyncio.to_thread(
-                self.ev_client.member.get_all,
-                query=query,
-                search=search_indefinite,
+            active_members = await fetch_active_members(
+                self.ev_client, query=query, today=today
             )
-
-            search_future_resignation = MemberDateFilter(resignationDate__gte=today, isApplication=False)
-            members_resigning = await asyncio.to_thread(
-                self.ev_client.member.get_all,
-                query=query,
-                search=search_future_resignation,
-            )
-
-            # Deduplicate by ID
-            active_members = list({m.id: m for m in members_indefinite + members_resigning}.values())
         except Exception:
             logger.exception("Failed to fetch members from easyVerein for /abteilung mitglieder.")
             await interaction.followup.send("❌ Fehler beim Abrufen der Mitglieder aus easyVerein.")

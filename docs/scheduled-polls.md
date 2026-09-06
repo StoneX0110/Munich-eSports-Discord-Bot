@@ -75,6 +75,7 @@ Als geantwortet zählt:
 - oder **Keine Zeit** wurde gewählt
 
 Der Reminder enthält einen Link zur aktiven Umfrage. Pro aktiver Umfrage wird der automatische Reminder nur einmal verschickt.
+Bei großen Rollen verteilt der Bot die Erwähnungen automatisch auf mehrere Discord-Nachrichten.
 
 ---
 
@@ -84,10 +85,15 @@ Pro Konfiguration gibt es immer nur eine aktive Umfrage.
 
 Wenn eine neue Wochenumfrage gepostet wird:
 
-1. Die alte aktive Umfrage wird geschlossen
-2. Die Buttons der alten Nachricht werden entfernt
-3. Eine neue Umfrage für die nächste Woche wird gepostet
+1. Eine neue Umfrage für die nächste Woche wird gepostet
+2. Erst nach erfolgreichem Posten wird sie als aktive Umfrage gespeichert
+3. Die alte Umfrage wird geschlossen und ihre Buttons werden entfernt
 4. Die konfigurierte Rolle wird im neuen Beitrag gepingt
+
+Schlägt das Posten fehl, bleibt die bisherige Umfrage aktiv und bedienbar. Antworten auf alte,
+bereits ersetzte Umfrage-Nachrichten werden abgewiesen. Bei großen Teams zeigt die Übersicht
+weiterhin die vollständigen Stimmenzahlen und kürzt lediglich lange Namenslisten mit einer
+Zusammenfassung der übrigen Teilnehmenden.
 
 Falls der Bot in derselben Woche mehrfach in der Posting-Stunde läuft oder neu startet, wird dieselbe Wochenumfrage nicht doppelt gepostet.
 
