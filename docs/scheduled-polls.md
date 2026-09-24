@@ -90,13 +90,6 @@ Wenn eine neue Wochenumfrage gepostet wird:
 3. Die alte Umfrage wird geschlossen und ihre Buttons werden entfernt
 4. Die konfigurierte Rolle wird im neuen Beitrag gepingt
 
-Schlägt das Posten fehl, bleibt die bisherige Umfrage aktiv und bedienbar. Antworten auf alte,
-bereits ersetzte Umfrage-Nachrichten werden abgewiesen. Bei großen Teams zeigt die Übersicht
-weiterhin die vollständigen Stimmenzahlen und kürzt lediglich lange Namenslisten mit einer
-Zusammenfassung der übrigen Teilnehmenden.
-
-Falls der Bot in derselben Woche mehrfach in der Posting-Stunde läuft oder neu startet, wird dieselbe Wochenumfrage nicht doppelt gepostet.
-
 ---
 
 ## Berechtigungen

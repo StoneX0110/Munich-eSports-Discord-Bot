@@ -30,7 +30,7 @@ Automatische Nachrichten mit Rollen-Ping für regelmäßige Team-Termine, Friste
 | `hour` | Stunde im 24h-Format von `0` bis `23`, z.B. `18` für 18:00. |
 | Zeitzone | Alle Zeiten werden in `Europe/Berlin` ausgewertet. |
 
-Der Bot prüft einmal pro Stunde, ob ein Reminder fällig ist. Automatische Reminder werden pro Kalendertag nur einmal gesendet, damit ein Bot-Neustart oder erneuter Loop-Lauf keine doppelte Nachricht erzeugt. Im Dry-Run startet der Hintergrund-Loop nicht; auch manuell aufgerufene Sendelogik unterdrückt echte Nachrichten.
+Der Bot prüft einmal pro Stunde, ob ein Reminder fällig ist. Automatische Reminder werden pro Kalendertag nur einmal gesendet, damit ein Bot-Neustart oder erneuter Loop-Lauf keine doppelte Nachricht erzeugt.
 
 ---
 
