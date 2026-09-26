@@ -519,6 +519,8 @@ async def _setup_hook():
     logger.info("Voting cog loaded.")
     await bot.load_extension("cogs.department")
     logger.info("Department cog loaded.")
+    await bot.load_extension("cogs.teams")
+    logger.info("Teams cog loaded.")
     await bot.load_extension("cogs.honeypot")
     logger.info("Honeypot cog loaded.")
     await bot.load_extension("cogs.scheduled_polls")
