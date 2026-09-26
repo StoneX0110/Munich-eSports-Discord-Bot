@@ -20,5 +20,5 @@ def test_startup_initializes_runtime_and_only_registers_cogs_when_live(dry_run):
         bot.main(['--dry-run'] if dry_run else [])
     logging.assert_called_once()
     client.assert_called_once()
-    assert load.await_count == (0 if dry_run else 5)
+    assert load.await_count == (0 if dry_run else 6)
     assert sync.await_count == (0 if dry_run else 1)
